@@ -6,6 +6,8 @@ export const paymentOrders = pgTable('payment_orders', {
   amountCents: integer('amount_cents').notNull(),
   status: text('status').notNull().default('pending'),
   jobId: text('job_id'),
+  sourceObjectRef: text('source_object_ref'),
+  generationRequestJson: text('generation_request_json'),
   pfPaymentId: text('pf_payment_id'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   paidAt: timestamp('paid_at', { withTimezone: true }),
