@@ -2,29 +2,19 @@ import { NextResponse } from 'next/server';
 import { toSpriteGenJob, type SpriteGenProvider } from '@/lib/game-factory/sprite-gen-contract';
 import type { CharacterGenerationRequest } from '@/lib/game-factory/types';
 
-/**
- * Honest integration boundary for the future sprite worker.
- *
- * We intentionally do not pretend generation succeeded when no worker is
- * configured. The browser prototype remains local-only until a secure worker
- * endpoint is deployed.
- */
+export const runtime = 'nodejs';
+
 export async function POST(request: Request) {
   const workerUrl = process.env.SPRITE_GEN_WORKER_URL;
 
   if (!workerUrl) {
     return NextResponse.json(
-      {
-        ok: false,
-        code: 'GENERATOR_NOT_CONFIGURED',
-        message: 'The sprite generator is not connected yet. The demo remains browser-only.',
-      },
+      { ok: false, code: 'GENERATOR_NOT_CONFIGURED', message: 'The sprite generator is not connected yet. The demo remains browser-only.' },
       { status: 503 },
     );
   }
 
   let body: CharacterGenerationRequest & { provider?: SpriteGenProvider };
-
   try {
     body = (await request.json()) as CharacterGenerationRequest & { provider?: SpriteGenProvider };
   } catch {
@@ -39,26 +29,40 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, code: 'SAFETY_POLICY_VIOLATION' }, { status: 400 });
   }
 
-  const provider = body.provider ?? 'codex';
-  const job = toSpriteGenJob(body, provider);
-
-  // The worker contract is metadata-first. Secure photo transfer will be added
-  // with the production object-storage/TTL implementation; never put a child
-  // photo into this JSON payload.
-  const workerResponse = await fetch(workerUrl, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(job),
-    cache: 'no-store',
-  });
-
-  if (!workerResponse.ok) {
+  const sourceObjectRef = (body as CharacterGenerationRequest & { sourceObjectRef?: string }).sourceObjectRef;
+  if (!sourceObjectRef) {
     return NextResponse.json(
-      { ok: false, code: 'GENERATOR_UNAVAILABLE', upstreamStatus: workerResponse.status },
-      { status: 502 },
+      { ok: false, code: 'SOURCE_PHOTO_TRANSFER_REQUIRED', message: 'Upload the temporary source photo before generation.' },
+      { status: 400 },
     );
   }
 
-  const result = await workerResponse.json();
-  return NextResponse.json({ ok: true, jobId: body.jobId, result }, { status: 202 });
+  const provider = body.provider ?? 'codex';
+  const job = toSpriteGenJob(body, provider);
+  const authenticatedHeaders: HeadersInit = { 'content-type': 'application/json' };
+  const secret = process.env.SPRITE_GEN_SHARED_SECRET;
+  if (secret) authenticatedHeaders['x-worker-secret'] = secret;
+
+  try {
+    const workerResponse = await fetch(`${workerUrl.replace(/\/$/, '')}/generate`, {
+      method: 'POST',
+      headers: authenticatedHeaders,
+      body: JSON.stringify({ ...job, sourceObjectRef }),
+      cache: 'no-store',
+    });
+
+    const text = await workerResponse.text();
+    let result: unknown;
+    try {
+      result = JSON.parse(text);
+    } catch {
+      result = { ok: false, code: 'INVALID_WORKER_RESPONSE' };
+    }
+    return NextResponse.json(result, { status: workerResponse.status });
+  } catch {
+    return NextResponse.json(
+      { ok: false, code: 'GENERATOR_UNAVAILABLE', message: 'Sprite worker could not be reached.' },
+      { status: 502 },
+    );
+  }
 }
