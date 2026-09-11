@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { claimGeneration, getPaymentOrder, markGenerationComplete, releaseGenerationClaim } from '@/lib/db/payment-orders';
-import { upsertGameRecord } from '@/lib/db/game-records';
+import { getGameRecord, upsertGameRecord } from '@/lib/db/game-records';
 import { toSpriteGenJob, type SpriteGenProvider } from '@/lib/game-factory/sprite-gen-contract';
 import type { CharacterGenerationRequest } from '@/lib/game-factory/types';
 import { isUuid } from '@/lib/payments/order';
@@ -28,7 +28,6 @@ export async function POST(request: Request) {
   if (!order.jobId || !isUuid(order.jobId)) return NextResponse.json({ ok: false, code: 'INVALID_PAYMENT_JOB' }, { status: 400 });
   if (!order.sourceObjectRef || !order.generationRequestJson) return NextResponse.json({ ok: false, code: 'GENERATION_ORDER_DATA_MISSING' }, { status: 409 });
   if (order.generationStatus === 'complete') return NextResponse.json({ ok: false, code: 'GENERATION_ALREADY_COMPLETE', paymentId: order.paymentId, jobId: order.jobId }, { status: 409 });
-  if (order.generationStatus === 'running') return NextResponse.json({ ok: false, code: 'GENERATION_ALREADY_RUNNING', paymentId: order.paymentId, jobId: order.jobId }, { status: 409 });
 
   let generationRequest: CharacterGenerationRequest;
   try {
@@ -40,12 +39,45 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, code: 'GENERATION_POLICY_VIOLATION' }, { status: 400 });
   }
 
+  // Recovery guard: if the worker already completed and Vercel died before the
+  // final payment-order update, reuse the durable paid game rather than rerun
+  // the expensive generation job or leave the order stuck in `running`.
+  if (order.generationStatus === 'running') {
+    try {
+      const existingGame = await getGameRecord(order.jobId);
+      if (existingGame?.status === 'paid') {
+        await markGenerationComplete(body.paymentId);
+        return NextResponse.json({
+          ok: true,
+          recovered: true,
+          jobId: existingGame.jobId,
+          game: { childName: existingGame.childName, adventure: existingGame.adventure },
+        });
+      }
+    } catch {
+      return NextResponse.json({ ok: false, code: 'GENERATION_RECOVERY_LOOKUP_FAILED' }, { status: 500 });
+    }
+    return NextResponse.json({ ok: false, code: 'GENERATION_ALREADY_RUNNING', paymentId: order.paymentId, jobId: order.jobId }, { status: 409 });
+  }
+
   let claimed = false;
   try {
     claimed = await claimGeneration(body.paymentId);
     if (!claimed) {
       const current = await getPaymentOrder(body.paymentId);
       if (current?.generationStatus === 'complete') return NextResponse.json({ ok: false, code: 'GENERATION_ALREADY_COMPLETE', paymentId: current.paymentId, jobId: current.jobId }, { status: 409 });
+      if (current?.generationStatus === 'running' && current.jobId) {
+        const existingGame = await getGameRecord(current.jobId).catch(() => null);
+        if (existingGame?.status === 'paid') {
+          await markGenerationComplete(body.paymentId);
+          return NextResponse.json({
+            ok: true,
+            recovered: true,
+            jobId: existingGame.jobId,
+            game: { childName: existingGame.childName, adventure: existingGame.adventure },
+          });
+        }
+      }
       return NextResponse.json({ ok: false, code: 'GENERATION_ALREADY_RUNNING', paymentId: current?.paymentId ?? body.paymentId, jobId: current?.jobId ?? order.jobId }, { status: 409 });
     }
 
