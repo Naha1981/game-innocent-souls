@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getPaymentOrder } from '@/lib/db/payment-orders';
+import { claimGeneration, getPaymentOrder, markGenerationComplete, releaseGenerationClaim } from '@/lib/db/payment-orders';
 import { upsertGameRecord } from '@/lib/db/game-records';
 import { toSpriteGenJob, type SpriteGenProvider } from '@/lib/game-factory/sprite-gen-contract';
 import type { CharacterGenerationRequest } from '@/lib/game-factory/types';
@@ -26,6 +26,8 @@ export async function POST(request: Request) {
   if (order.status !== 'paid') return NextResponse.json({ ok: false, code: 'PAYMENT_NOT_VERIFIED' }, { status: 402 });
   if (!order.jobId || !isUuid(order.jobId)) return NextResponse.json({ ok: false, code: 'INVALID_PAYMENT_JOB' }, { status: 400 });
   if (!order.sourceObjectRef || !order.generationRequestJson) return NextResponse.json({ ok: false, code: 'GENERATION_ORDER_DATA_MISSING' }, { status: 409 });
+  if (order.generationStatus === 'complete') return NextResponse.json({ ok: false, code: 'GENERATION_ALREADY_COMPLETE', jobId: order.jobId }, { status: 409 });
+  if (order.generationStatus === 'running') return NextResponse.json({ ok: false, code: 'GENERATION_ALREADY_RUNNING', jobId: order.jobId }, { status: 409 });
 
   let generationRequest: CharacterGenerationRequest;
   try {
@@ -37,11 +39,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, code: 'GENERATION_POLICY_VIOLATION' }, { status: 400 });
   }
 
-  const provider = body.provider ?? 'codex';
-  const job = toSpriteGenJob({ ...generationRequest, sourceObjectRef: order.sourceObjectRef }, provider);
-  const authenticatedHeaders: HeadersInit = { 'content-type': 'application/json', 'x-worker-secret': workerSecret };
-
+  let claimed = false;
   try {
+    claimed = await claimGeneration(body.paymentId);
+    if (!claimed) return NextResponse.json({ ok: false, code: 'GENERATION_ALREADY_RUNNING' }, { status: 409 });
+
+    const provider = body.provider ?? 'codex';
+    const job = toSpriteGenJob({ ...generationRequest, sourceObjectRef: order.sourceObjectRef }, provider);
+    const authenticatedHeaders: HeadersInit = { 'content-type': 'application/json', 'x-worker-secret': workerSecret };
+
     const workerResponse = await fetch(`${workerUrl.replace(/\/$/, '')}/generate`, {
       method: 'POST',
       headers: authenticatedHeaders,
@@ -56,6 +62,7 @@ export async function POST(request: Request) {
       const atlas = result.result?.atlas;
       const manifest = result.result?.manifest;
       if (!atlas?.encoding || atlas.encoding !== 'base64' || typeof atlas.data !== 'string' || !manifest?.frame_layout?.rows) {
+        await releaseGenerationClaim(body.paymentId);
         return NextResponse.json({ ok: false, code: 'INVALID_GENERATOR_OUTPUT' }, { status: 502 });
       }
       await upsertGameRecord({
@@ -67,6 +74,7 @@ export async function POST(request: Request) {
         manifest,
         status: 'paid',
       });
+      await markGenerationComplete(body.paymentId);
       return NextResponse.json({
         ok: true,
         jobId: generationRequest.jobId,
@@ -75,8 +83,10 @@ export async function POST(request: Request) {
       }, { status: workerResponse.status });
     }
 
+    await releaseGenerationClaim(body.paymentId);
     return NextResponse.json(result, { status: workerResponse.status });
   } catch {
+    if (claimed) await releaseGenerationClaim(body.paymentId).catch(() => {});
     return NextResponse.json({ ok: false, code: 'GENERATOR_UNAVAILABLE', message: 'Sprite worker could not be reached.' }, { status: 502 });
   }
 }
