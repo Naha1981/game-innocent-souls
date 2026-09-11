@@ -20,9 +20,25 @@ export async function POST(request: Request) {
   if (!process.env.DATABASE_URL?.trim()) return NextResponse.json({ ok: false, code: 'DATABASE_NOT_CONFIGURED' }, { status: 503 });
 
   try {
-    const body = await request.json() as { package?: unknown; jobId?: unknown };
+    const body = await request.json() as {
+      package?: unknown;
+      jobId?: unknown;
+      sourceObjectRef?: unknown;
+      generationRequest?: unknown;
+    };
     if (!isNahaKidsPackage(body.package)) return NextResponse.json({ ok: false, code: 'INVALID_PACKAGE' }, { status: 400 });
-    if (body.jobId !== undefined && !isUuid(body.jobId)) return NextResponse.json({ ok: false, code: 'INVALID_JOB_ID' }, { status: 400 });
+    if (typeof body.jobId !== 'string' || !isUuid(body.jobId)) return NextResponse.json({ ok: false, code: 'INVALID_JOB_ID' }, { status: 400 });
+    if (typeof body.sourceObjectRef !== 'string' || !/^tmp:\/\/[0-9a-f]{32}$/.test(body.sourceObjectRef)) {
+      return NextResponse.json({ ok: false, code: 'INVALID_SOURCE_OBJECT_REF' }, { status: 400 });
+    }
+    if (!body.generationRequest || typeof body.generationRequest !== 'object' || Array.isArray(body.generationRequest)) {
+      return NextResponse.json({ ok: false, code: 'INVALID_GENERATION_REQUEST' }, { status: 400 });
+    }
+
+    const generationRequest = body.generationRequest as Record<string, unknown>;
+    if (generationRequest.jobId !== body.jobId || generationRequest.consent === undefined || generationRequest.safety === undefined) {
+      return NextResponse.json({ ok: false, code: 'GENERATION_ORDER_MISMATCH' }, { status: 400 });
+    }
 
     const paymentId = randomUUID();
     const product = NAHAKIDS_PACKAGES[body.package];
@@ -30,12 +46,14 @@ export async function POST(request: Request) {
       paymentId,
       packageId: body.package,
       amountCents: paymentAmountCents(product.amount),
-      jobId: typeof body.jobId === 'string' ? body.jobId : undefined,
+      jobId: body.jobId,
+      sourceObjectRef: body.sourceObjectRef,
+      generationRequestJson: JSON.stringify(generationRequest),
     });
 
     const baseUrl = publicBaseUrl(request);
     const testing = process.env.PAYFAST_SANDBOX === 'true';
-    const returnPath = typeof body.jobId === 'string' ? `/g/${body.jobId}` : '/';
+    const returnPath = '/';
     const fields = {
       merchant_id: merchantId,
       merchant_key: merchantKey,
@@ -47,7 +65,7 @@ export async function POST(request: Request) {
       item_name: product.itemName,
       item_description: product.description,
       custom_str1: body.package,
-      custom_str2: typeof body.jobId === 'string' ? body.jobId : '',
+      custom_str2: body.jobId,
     };
     const checkout = buildPayfastCheckout(fields, passphrase);
     return NextResponse.json({ ok: true, paymentId, package: body.package, amount: fields.amount, action: testing ? 'https://sandbox.payfast.co.za/eng/process' : 'https://www.payfast.co.za/eng/process', fields: checkout });
