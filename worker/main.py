@@ -47,6 +47,7 @@ class SpriteJob(BaseModel):
 
 app = FastAPI(title="NahaKids Sprite Generation Worker", version="0.4.0")
 cleanup_task: asyncio.Task | None = None
+active_sources: set[str] = set()
 
 def config() -> dict[str, object]:
     root = os.getenv("SPRITE_GEN_ROOT")
@@ -81,6 +82,9 @@ def purge_expired_sources() -> int:
     cutoff = time.time() - SOURCE_TTL_SECONDS
     deleted = 0
     for candidate in root.glob("*.source"):
+        token = candidate.stem
+        if token in active_sources:
+            continue
         try:
             if candidate.stat().st_mtime < cutoff:
                 candidate.unlink(missing_ok=True)
@@ -324,6 +328,8 @@ async def generate(payload: dict, x_worker_secret: str | None = Header(default=N
     if parent and not parent.is_absolute():
         return error("INVALID_WORK_ROOT", "SPRITE_GEN_WORK_ROOT must be absolute.", 500)
     run_dir: Path | None = None
+    source_token = job.sourceObjectRef.removeprefix("tmp://") if job.sourceObjectRef else ""
+    active_sources.add(source_token)
     try:
         run_dir = Path(tempfile.mkdtemp(prefix=f"nahakids-{job.jobId}-", dir=str(parent) if parent else None))
         safe_log("job_started", jobId=job.jobId, adventure=job.adventure, provider=job.provider)
@@ -338,6 +344,7 @@ async def generate(payload: dict, x_worker_secret: str | None = Header(default=N
         safe_log("job_failed", jobId=job.jobId, code=str(exc))
         return error("SPRITE_GEN_FAILED", "Sprite generation failed before a playable asset was produced.", 500)
     finally:
+        active_sources.discard(source_token)
         base_source.unlink(missing_ok=True) if 'base_source' in locals() else None
         if run_dir:
             shutil.rmtree(run_dir, ignore_errors=True)
