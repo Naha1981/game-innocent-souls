@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, ne } from 'drizzle-orm';
 import { getDb } from './index';
 import { paymentOrders } from './schema';
 import type { NahaKidsPackage } from '../payfast';
@@ -34,6 +34,7 @@ export async function markPaymentPaid(input: {
       eq(paymentOrders.paymentId, input.paymentId),
       eq(paymentOrders.packageId, input.packageId),
       eq(paymentOrders.amountCents, input.amountCents),
+      ne(paymentOrders.status, 'paid'),
     ))
     .returning({ paymentId: paymentOrders.paymentId });
   return result.length === 1;
