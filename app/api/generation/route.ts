@@ -7,7 +7,8 @@ export const runtime = 'nodejs';
 
 export async function POST(request: Request) {
   const workerUrl = process.env.SPRITE_GEN_WORKER_URL;
-  if (!workerUrl) return NextResponse.json({ ok: false, code: 'GENERATOR_NOT_CONFIGURED', message: 'The sprite generator is not connected yet. The demo remains browser-only.' }, { status: 503 });
+  const secret = process.env.SPRITE_GEN_SHARED_SECRET?.trim();
+  if (!workerUrl || !secret) return NextResponse.json({ ok: false, code: 'GENERATOR_NOT_CONFIGURED', message: 'The sprite generator is not securely connected yet.' }, { status: 503 });
 
   let body: CharacterGenerationRequest & { provider?: SpriteGenProvider };
   try { body = (await request.json()) as CharacterGenerationRequest & { provider?: SpriteGenProvider }; }
@@ -21,9 +22,7 @@ export async function POST(request: Request) {
 
   const provider = body.provider ?? 'codex';
   const job = toSpriteGenJob(body, provider);
-  const authenticatedHeaders: HeadersInit = { 'content-type': 'application/json' };
-  const secret = process.env.SPRITE_GEN_SHARED_SECRET;
-  if (secret) authenticatedHeaders['x-worker-secret'] = secret;
+  const authenticatedHeaders: HeadersInit = { 'content-type': 'application/json', 'x-worker-secret': secret };
 
   try {
     const workerResponse = await fetch(`${workerUrl.replace(/\/$/, '')}/generate`, { method: 'POST', headers: authenticatedHeaders, body: JSON.stringify({ ...job, sourceObjectRef }), cache: 'no-store' });
