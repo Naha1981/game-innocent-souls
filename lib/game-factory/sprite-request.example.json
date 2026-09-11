@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "1.0",
+  "character": {
+    "source": "temporary-child-photo",
+    "style": "friendly-2d-game-character",
+    "identityLock": "stylised-only",
+    "negative": [
+      "photorealistic-face",
+      "biometric-identification",
+      "text",
+      "watermark",
+      "extra-limbs"
+    ]
+  },
+  "actions": [
+    { "id": "idle", "frames": 4 },
+    { "id": "walk", "frames": 6 },
+    { "id": "jump", "frames": 4 },
+    { "id": "celebrate", "frames": 6 }
+  ],
+  "atlas": {
+    "format": "png",
+    "transparentBackground": true,
+    "layout": "row-per-animation"
+  },
+  "retention": {
+    "sourcePhoto": "delete-after-generation",
+    "generatedAsset": "retain-until-parent-or-operator-deletes"
+  }
+}
