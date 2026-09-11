@@ -2,6 +2,7 @@ import type { AdventureId } from './types';
 
 export type ThemeGameplay = {
   adventure: AdventureId;
+  name: string;
   objective: string;
   collectible: string;
   finish: string;
@@ -17,6 +18,7 @@ const COMMON_GOAL_COUNT = 5;
 export const THEME_GAMEPLAY: Record<AdventureId, ThemeGameplay> = {
   football: {
     adventure: 'football',
+    name: 'Street Football',
     objective: 'Collect 5 footballs, then score at the goal.',
     collectible: '⚽',
     finish: '🥅',
@@ -27,6 +29,7 @@ export const THEME_GAMEPLAY: Record<AdventureId, ThemeGameplay> = {
   },
   hero: {
     adventure: 'hero',
+    name: 'Superhero',
     objective: 'Collect 5 rescue stars, then save the neighbourhood.',
     collectible: '⭐',
     finish: '🏠',
@@ -37,6 +40,7 @@ export const THEME_GAMEPLAY: Record<AdventureId, ThemeGameplay> = {
   },
   racer: {
     adventure: 'racer',
+    name: 'Speed Racer',
     objective: 'Collect 5 checkpoints and beat the finish line.',
     collectible: '🏁',
     finish: '🏆',
@@ -48,6 +52,7 @@ export const THEME_GAMEPLAY: Record<AdventureId, ThemeGameplay> = {
   },
   space: {
     adventure: 'space',
+    name: 'Space Explorer',
     objective: 'Collect 5 stars, then reach the launch portal.',
     collectible: '⭐',
     finish: '🌀',
