@@ -51,7 +51,7 @@ cleanup_task: asyncio.Task | None = None
 def config() -> dict[str, object]:
     root = os.getenv("SPRITE_GEN_ROOT")
     provider = os.getenv("SPRITE_GEN_PROVIDER", "codex")
-    timeout = int(os.getenv("SPRITE_GEN_TIMEOUT_SECONDS", "900"))
+    timeout = int(os.getenv("SPRITE_GEN_TIMEOUT_SECONDS", "240"))
     source_root = os.getenv("SPRITE_GEN_SOURCE_ROOT") or str(Path(tempfile.gettempdir()) / "nahakids-source")
     return {"configured": bool(root and Path(root).is_absolute()), "provider": provider,
             "timeoutSeconds": timeout, "root": root, "sourceRoot": source_root,
@@ -328,20 +328,17 @@ async def generate(payload: dict, x_worker_secret: str | None = Header(default=N
         run_dir = Path(tempfile.mkdtemp(prefix=f"nahakids-{job.jobId}-", dir=str(parent) if parent else None))
         safe_log("job_started", jobId=job.jobId, adventure=job.adventure, provider=job.provider)
         result = run_pipeline(job, run_dir, cli, base_source)
-        safe_log("job_succeeded", jobId=job.jobId, atlasBytes=result["atlas"]["sizeBytes"])
-        return JSONResponse({"ok": True, "jobId": job.jobId, "result": result}, status_code=202)
-    except subprocess.TimeoutExpired:
-        safe_log("job_failed", jobId=job.jobId, code="GENERATOR_TIMEOUT")
-        return error("GENERATOR_TIMEOUT", "Sprite generation exceeded the worker timeout.", 504)
-    except RuntimeError as exc:
-        safe_log("job_failed", jobId=job.jobId, code=str(exc))
-        return error("GENERATOR_FAILED", "Sprite generation failed QA or execution.", 502)
-    except Exception:
-        safe_log("job_failed", jobId=job.jobId, code="INTERNAL_ERROR")
-        return error("INTERNAL_ERROR", "Unexpected worker failure.", 500)
-    finally:
-        if run_dir and run_dir.exists():
-            shutil.rmtree(run_dir, ignore_errors=True)
         base_source.unlink(missing_ok=True)
-        safe_log("temporary_source_deleted", jobId=job.jobId)
-        safe_log("temporary_run_deleted", jobId=job.jobId)
+        safe_log("job_completed", jobId=job.jobId)
+        return JSONResponse({"ok": True, "jobId": job.jobId, "result": result}, status_code=200)
+    except subprocess.TimeoutExpired:
+        safe_log("job_timeout", jobId=job.jobId)
+        return error("SPRITE_GEN_TIMEOUT", "Sprite generation exceeded the configured 240 second stage budget.", 504)
+    except Exception as exc:
+        safe_log("job_failed", jobId=job.jobId, code=str(exc))
+        return error("SPRITE_GEN_FAILED", "Sprite generation failed before a playable asset was produced.", 500)
+    finally:
+        base_source.unlink(missing_ok=True) if 'base_source' in locals() else None
+        if run_dir:
+            shutil.rmtree(run_dir, ignore_errors=True)
+
