@@ -16,6 +16,7 @@ export default function SharedGame({ params }: { params: { jobId: string } }) {
   const [won, setWon] = useState(false);
   const [frame, setFrame] = useState(0);
   const [state, setState] = useState<'idle' | 'walk' | 'jump' | 'celebrate'>('idle');
+  const [copied, setCopied] = useState(false);
 
   const spec = useMemo(() => game ? getThemeGameplay(game.adventure) : null, [game]);
   const rects = game?.manifest.frame_layout?.rows?.[state] ?? [];
@@ -24,6 +25,7 @@ export default function SharedGame({ params }: { params: { jobId: string } }) {
   const cellHeight = game?.manifest.frame_layout?.cellHeight ?? 256;
   const sheetWidth = game?.manifest.frame_layout?.sheetWidth ?? 1024;
   const sheetHeight = game?.manifest.frame_layout?.sheetHeight ?? 1024;
+  const shareUrl = typeof window === 'undefined' ? '' : window.location.href;
 
   async function loadGame() {
     const response = await fetch(`/api/games/${encodeURIComponent(params.jobId)}`, { cache: 'no-store' });
@@ -68,6 +70,13 @@ export default function SharedGame({ params }: { params: { jobId: string } }) {
     } else if (score >= spec.goalCount && next >= spec.goalPosition) { setWon(true); setState('celebrate'); }
   }
 
+  async function copyShareLink() {
+    if (!shareUrl || !navigator.clipboard) return;
+    await navigator.clipboard.writeText(shareUrl);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1800);
+  }
+
   if (loading) return <main className="shell"><section className="card" style={{ maxWidth: 720, margin: '80px auto' }}><div className="section-kicker">NAHAKIDS / LOADING</div><h1>Opening the game…</h1><p className="muted">Loading the personalised game record.</p></section></main>;
   if (!game) return <main className="shell"><section className="card" style={{ maxWidth: 720, margin: '80px auto' }}><div className="section-kicker">NAHAKIDS / PAYMENT</div><h1>{pending ? 'Payment is being verified…' : 'Game unavailable'}</h1><p className="muted">{pending ? 'Payfast has returned you to NahaKids. We are waiting for the server-side payment confirmation. This page will update automatically.' : 'This game does not exist, has not been paid for, or is no longer available.'}</p></section></main>;
 
@@ -87,9 +96,10 @@ export default function SharedGame({ params }: { params: { jobId: string } }) {
         <div className="score">{spec?.collectible} {score}/{spec?.goalCount}</div>
         {won && <div className="win-message"><strong>🎉 {game.childName.toUpperCase()} DID IT!</strong><span>{spec?.objective}</span><button onClick={() => { setPosition(42); setScore(0); setWon(false); setState('idle'); }}>PLAY AGAIN</button></div>}
       </div>
-      {!won && <div className="controls"><div className="game-title">{score >= (spec?.goalCount ?? 5) ? spec?.actionHint : spec?.objective}</div><div className="control-row"><button onClick={() => move(-1)}>←</button><button onClick={() => move(1)}>→</button><button onClick={() => { setState('jump'); window.setTimeout(() => setState(current => current === 'jump' ? 'idle' : current), 650); }}>JUMP</button><button onClick={() => { setState('celebrate'); window.setTimeout(() => setState(current => current === 'celebrate' ? 'idle' : current), 900); }}>{spec?.actionLabel}</button></div><div className="muted">Move with ← → or tap the controls. Collect every {spec?.collectible}, then reach the finish.</div></div>}
+      {!won && <div className="controls"><div className="game-title">{score >= (spec?.goalCount ?? 5) ? spec?.actionHint : spec?.objective}</div><div className="control-row"><button onClick={() => move(-1)} aria-label="Move left">←</button><button onClick={() => move(1)} aria-label="Move right">→</button><button onClick={() => { setState('jump'); window.setTimeout(() => setState(current => current === 'jump' ? 'idle' : current), 650); }}>JUMP</button><button onClick={() => { setState('celebrate'); window.setTimeout(() => setState(current => current === 'celebrate' ? 'idle' : current), 900); }}>{spec?.actionLabel}</button></div><div className="muted">Move with ← → or tap the controls. Collect every {spec?.collectible}, then reach the finish.</div></div>}
+      <div className="share-card"><div><strong>Share {game.childName}&apos;s game</strong><p className="muted">Scan the QR code or copy the link. No original child photo is shared.</p><button onClick={copyShareLink}>{copied ? 'COPIED ✓' : 'COPY GAME LINK'}</button></div><img src={`/api/games/${encodeURIComponent(game.jobId)}/qr`} width={180} height={180} alt="QR code for this personalised game" /></div>
       <div className="pipeline-card"><div className="pipeline-head"><strong>NAHAKIDS GAME</strong><span>PAYMENT VERIFIED</span></div><div className="pipeline-grid"><span>Character<strong>{game.childName}</strong></span><span>Adventure<strong>{spec?.name}</strong></span><span>Animations<strong>Idle · Walk · Jump · Celebrate</strong></span><span>Privacy<strong>Original photo not stored in game</strong></span></div></div>
     </section>
-    <footer className="footer">Made by NahaLabs • NahaKids • Share this link with family and friends.</footer>
+    <footer className="footer">Made by NahaLabs • NahaKids • Share this game with family and friends.</footer>
   </main>;
 }
