@@ -82,7 +82,7 @@ export async function POST(request: Request) {
     }
 
     const provider = body.provider ?? 'codex';
-    const job = toSpriteGenJob({ ...generationRequest, sourceObjectRef: order.sourceObjectRef }, provider);
+    const job = toSpriteGenJob(generationRequest, provider);
     const authenticatedHeaders: HeadersInit = { 'content-type': 'application/json', 'x-worker-secret': workerSecret };
 
     const workerResponse = await fetch(`${workerUrl.replace(/\/$/, '')}/generate`, {
