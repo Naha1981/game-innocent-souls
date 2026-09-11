@@ -10,3 +10,15 @@ export const paymentOrders = pgTable('payment_orders', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   paidAt: timestamp('paid_at', { withTimezone: true }),
 });
+
+export const gameRecords = pgTable('game_records', {
+  jobId: text('job_id').primaryKey(),
+  childName: text('child_name').notNull(),
+  adventure: text('adventure').notNull(),
+  atlasData: text('atlas_data').notNull(),
+  atlasMimeType: text('atlas_mime_type').notNull().default('image/png'),
+  manifestJson: text('manifest_json').notNull(),
+  status: text('status').notNull().default('draft'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  paidAt: timestamp('paid_at', { withTimezone: true }),
+});
