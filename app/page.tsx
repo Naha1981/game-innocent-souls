@@ -3,6 +3,7 @@
 import { ChangeEvent, useEffect, useMemo, useState } from 'react';
 import type { CharacterGenerationRequest, RuntimeManifest } from '../lib/game-factory/types';
 import { GAME_GOAL_STARS, FINISH_POSITION, PLAYER_START_POSITION, collectiblePosition, hasWon, isCollectibleHit, nextPlayerPosition } from '../lib/game-factory/gameplay';
+import { getThemeGameplay } from '../lib/game-factory/theme-gameplay';
 
 type Theme = { id: CharacterGenerationRequest['adventure']; name: string; line: string; icon: string };
 const themes: Theme[] = [
@@ -26,8 +27,10 @@ export default function Home() {
   const [created, setCreated] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [gameWon, setGameWon] = useState(false);
+  const [gameLost, setGameLost] = useState(false);
   const [starsCollected, setStarsCollected] = useState(0);
   const [position, setPosition] = useState(PLAYER_START_POSITION);
+  const [timeLeft, setTimeLeft] = useState(30);
   const [jobId, setJobId] = useState<string | null>(null);
   const [generationState, setGenerationState] = useState<GenerationState>('idle');
   const [generationError, setGenerationError] = useState<string | null>(null);
@@ -37,13 +40,16 @@ export default function Home() {
   const [frameIndex, setFrameIndex] = useState(0);
 
   const selected = useMemo(() => themes.find(t => t.id === theme)!, [theme]);
+  const gameSpec = useMemo(() => getThemeGameplay(theme), [theme]);
   const activeRects = generatedAsset?.manifest.frame_layout?.rows?.[animationState] ?? [];
   const activeRect = activeRects[frameIndex % Math.max(1, activeRects.length)];
   const cellWidth = generatedAsset?.manifest.frame_layout?.cellWidth ?? 256;
   const cellHeight = generatedAsset?.manifest.frame_layout?.cellHeight ?? 256;
   const sheetWidth = generatedAsset?.manifest.frame_layout?.sheetWidth ?? 1024;
   const sheetHeight = generatedAsset?.manifest.frame_layout?.sheetHeight ?? 1024;
-  const currentStarPosition = collectiblePosition(starsCollected);
+  const currentCollectiblePosition = collectiblePosition(starsCollected);
+  const racerMode = theme === 'racer';
+  const timerPercent = racerMode ? Math.max(0, Math.min(100, (timeLeft / (gameSpec.timeLimitSeconds ?? 30)) * 100)) : 100;
 
   function clearGeneratedAsset() {
     setGeneratedAsset(null);
@@ -54,8 +60,10 @@ export default function Home() {
   function resetGame() {
     setPlaying(false);
     setGameWon(false);
+    setGameLost(false);
     setStarsCollected(0);
     setPosition(PLAYER_START_POSITION);
+    setTimeLeft(gameSpec.timeLimitSeconds ?? 30);
     setAnimationState('idle');
     setFrameIndex(0);
   }
@@ -140,11 +148,18 @@ export default function Home() {
   function play() {
     if (!generatedAsset) return;
     resetGame();
+    setTimeLeft(gameSpec.timeLimitSeconds ?? 30);
     setPlaying(true);
   }
 
+  function finishWin() {
+    setGameWon(true);
+    setPlaying(false);
+    setAnimationState('celebrate');
+  }
+
   function move(direction: -1 | 1) {
-    if (!playing || gameWon || !generatedAsset) return;
+    if (!playing || gameWon || gameLost || !generatedAsset) return;
     const nextPosition = nextPlayerPosition(position, direction);
     setPosition(nextPosition);
     setAnimationState('walk');
@@ -153,28 +168,24 @@ export default function Home() {
       const nextStars = starsCollected + 1;
       setStarsCollected(nextStars);
       setAnimationState('idle');
-      if (hasWon(nextStars, nextPosition)) {
-        setGameWon(true);
-        setAnimationState('celebrate');
-      }
-    } else if (starsCollected >= GAME_GOAL_STARS && hasWon(starsCollected, nextPosition)) {
-      setGameWon(true);
-      setAnimationState('celebrate');
+      if (hasWon(nextStars, nextPosition)) finishWin();
+    } else if (starsCollected >= gameSpec.goalCount && hasWon(starsCollected, nextPosition)) {
+      finishWin();
     }
   }
 
   function jump() {
-    if (!playing || gameWon || !generatedAsset) return;
+    if (!playing || gameWon || gameLost || !generatedAsset) return;
     setAnimationState('jump');
     window.setTimeout(() => {
       setAnimationState(current => current === 'jump' ? 'idle' : current);
     }, 650);
   }
 
-  function celebrate() {
-    if (!playing || !generatedAsset) return;
+  function actionFeedback() {
+    if (!playing || gameWon || gameLost || !generatedAsset) return;
     setAnimationState('celebrate');
-    if (!gameWon) window.setTimeout(() => setAnimationState(current => current === 'celebrate' ? 'idle' : current), 900);
+    window.setTimeout(() => setAnimationState(current => current === 'celebrate' ? 'idle' : current), 900);
   }
 
   useEffect(() => {
@@ -182,11 +193,28 @@ export default function Home() {
       if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 'a') move(-1);
       if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'd') move(1);
       if (e.key === ' ' || e.key.toLowerCase() === 'w') jump();
-      if (e.key.toLowerCase() === 'c') celebrate();
+      if (e.key.toLowerCase() === 'c') actionFeedback();
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   });
+
+  useEffect(() => {
+    if (!playing || !racerMode || gameWon || gameLost) return;
+    const timer = window.setInterval(() => {
+      setTimeLeft(current => {
+        if (current <= 1) {
+          window.clearInterval(timer);
+          setGameLost(true);
+          setPlaying(false);
+          setAnimationState('idle');
+          return 0;
+        }
+        return current - 1;
+      });
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [playing, racerMode, gameWon, gameLost]);
 
   useEffect(() => {
     if (!generatedAsset || !activeRects.length) return;
@@ -258,7 +286,7 @@ export default function Home() {
           {photo && <label className="upload secondary-upload">Replace photo<input type="file" accept="image/jpeg,image/png,image/webp" onChange={handlePhoto}/></label>}
 
           <div className="section-kicker adventure-kicker">02 / ADVENTURE</div><h2>Choose an adventure</h2>
-          <div className="themes">{themes.map(t => <button type="button" key={t.id} className={`theme ${theme === t.id ? 'active' : ''}`} onClick={() => setTheme(t.id)}><b>{t.icon} {t.name}</b><span className="muted">{t.line}</span></button>)}</div>
+          <div className="themes">{themes.map(t => <button type="button" key={t.id} className={`theme ${theme === t.id ? 'active' : ''}`} onClick={() => { setTheme(t.id); resetGame(); }}><b>{t.icon} {t.name}</b><span className="muted">{t.line}</span></button>)}</div>
           <label className="consent"><input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)}/><span>I confirm I am authorised to provide this child&apos;s photo for this demo experience.</span></label>
           <button className="cta" disabled={!photoFile || !name.trim() || !consent || generationState === 'uploading' || generationState === 'generating'} onClick={createGame}>{generationState === 'uploading' ? 'UPLOADING…' : generationState === 'generating' ? 'GENERATING…' : 'CREATE GAME'}</button>
           {generationError && <div className="muted" role="alert" style={{ marginTop: 10 }}>Real generator: {generationError}</div>}
@@ -269,21 +297,23 @@ export default function Home() {
           <div className={`game-screen ${playing ? 'playing' : ''}`}>
             <div className="sun"/><div className="hill"/>
             <div className="game-label">{created ? `${selected.icon} ${name} — ${selected.name}` : 'YOUR CHILD — ADVENTURE'}</div>
-            {playing && !gameWon && <div className="collectible" style={{ left: `${currentStarPosition}%` }}>★</div>}
-            {playing && <div className="finish-gate" style={{ left: `${FINISH_POSITION}%` }} aria-label="Finish gate">🏁</div>}
+            {playing && !gameWon && <div className="collectible" style={{ left: `${currentCollectiblePosition}%` }}>{gameSpec.collectible}</div>}
+            {playing && <div className="finish-gate" style={{ left: `${gameSpec.goalPosition}%` }} aria-label={gameSpec.finish}>{gameSpec.finish}</div>}
             {generatedAsset && activeRect ? <div className="player generated-player" style={{ ...spriteStyle, left: `${position}%` }} aria-label="Generated child game character" /> : <div className="player" style={{ left: `${position}%` }} aria-label="Prototype player character" />}
-            {playing && <div className="score">STARS {starsCollected}/{GAME_GOAL_STARS}</div>}
+            {playing && <div className="score">{racerMode ? `CHECKPOINTS ${starsCollected}/${gameSpec.goalCount}` : `${gameSpec.collectible} ${starsCollected}/${gameSpec.goalCount}`}</div>}
+            {playing && racerMode && <div className="timer" aria-label={`Time remaining ${timeLeft} seconds`}><strong>{timeLeft}s</strong><span style={{ width: `${timerPercent}%` }} /></div>}
             {!created && <div className="screen-message">Create a hero to begin</div>}
             {created && generationState !== 'succeeded' && <div className="screen-message">{generationState === 'error' ? 'Generation needs attention' : 'Your real hero is being created…'}</div>}
-            {created && generationState === 'succeeded' && !playing && <button className="play-button" onClick={play}>▶ PLAY {name.toUpperCase()}</button>}
-            {gameWon && <div className="win-message"><strong>🎉 YOU DID IT!</strong><span>{name} collected {GAME_GOAL_STARS} stars.</span><button onClick={play}>PLAY AGAIN</button></div>}
+            {created && generationState === 'succeeded' && !playing && !gameWon && !gameLost && <button className="play-button" onClick={play}>▶ PLAY {name.toUpperCase()}</button>}
+            {gameWon && <div className="win-message"><strong>🎉 YOU DID IT!</strong><span>{name} completed: {gameSpec.objective}</span><button onClick={play}>PLAY AGAIN</button></div>}
+            {gameLost && <div className="win-message"><strong>⏱️ TIME&apos;S UP!</strong><span>{name} missed the finish. Try the {selected.name} again.</span><button onClick={play}>TRY AGAIN</button></div>}
           </div>
           {created ? <div className="pipeline-card">
             <div className="pipeline-head"><strong>Generation pipeline</strong><span>{generationLabel}</span></div>
-            <div className="pipeline-grid"><span>Adventure<strong>{selected.name}</strong></span><span>Animations<strong>Idle · Walk · Jump · Celebrate</strong></span><span>Safety<strong>No biometric ID</strong></span><span>Source<strong>Temporary • deleted after generation</strong></span></div>
+            <div className="pipeline-grid"><span>Adventure<strong>{selected.name}</strong></span><span>Objective<strong>{gameSpec.objective}</strong></span><span>Animations<strong>Idle · Walk · Jump · Celebrate</strong></span><span>Safety<strong>No biometric ID</strong></span><span>Source<strong>Temporary • deleted after generation</strong></span></div>
             <div className="pipeline-id">Job {jobId?.slice(0, 8)}…{sourceObjectRef ? ' • source secured' : ''}{generatedAsset ? ' • atlas loaded' : ''}</div>
           </div> : <div><div className="game-title">Your game appears here</div><div className="steps"><span className="step">PHOTO</span><span className="step">CHARACTER</span><span className="step">ANIMATION</span><span className="step">PLAY</span></div></div>}
-          {playing && !gameWon && <div className="controls"><div className="game-title">{starsCollected >= GAME_GOAL_STARS ? `Reach the finish! ${FINISH_POSITION}%` : `Help ${name} collect ${GAME_GOAL_STARS} stars!`}</div><div className="control-row"><button onClick={() => move(-1)} aria-label="Move left">←</button><button onClick={() => move(1)} aria-label="Move right">→</button><button onClick={jump} disabled={!generatedAsset}>JUMP</button><button onClick={celebrate} disabled={!generatedAsset}>CELEBRATE</button><button className="stop" onClick={() => resetGame()}>STOP</button></div><div className="muted">Use ← → or A / D to move. Space / W jumps. C celebrates. Collect every star, then reach the flag.</div></div>}
+          {playing && !gameWon && !gameLost && <div className="controls"><div className="game-title">{starsCollected >= gameSpec.goalCount ? gameSpec.actionHint : gameSpec.objective}</div><div className="control-row"><button onClick={() => move(-1)} aria-label="Move left">←</button><button onClick={() => move(1)} aria-label="Move right">→</button><button onClick={jump} disabled={!generatedAsset}>JUMP</button><button onClick={actionFeedback} disabled={!generatedAsset}>{gameSpec.actionLabel}</button><button className="stop" onClick={() => resetGame()}>STOP</button></div><div className="muted">Use ← → or A / D to move. Space / W jumps. C triggers {gameSpec.actionLabel.toLowerCase()} feedback. {gameSpec.actionHint}</div></div>}
         </div>
       </section>
       <footer className="footer">NahaLabs • Creche demo • No facial recognition • Browser preview expires after 15 minutes. Production source retention is worker-controlled and deletion is enforced after generation.</footer>
