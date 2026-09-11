@@ -26,6 +26,7 @@ jobs:
       - run: npm run test:contracts
       - run: npm run test:gameplay
       - run: npm run build
+      - run: npm run test:smoke
 
   windows-build:
     name: Windows / Node 24 build
@@ -38,6 +39,7 @@ jobs:
       - run: npm install
       - run: npm run test:contracts
       - run: npm run build
+      - run: npm run test:smoke
 
   worker:
     name: Sprite worker / Python 3.12
