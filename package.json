@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "next lint",
     "test:contracts": "tsx scripts/verify-contracts.mjs",
-    "test:gameplay": "tsx lib/game-factory/theme-gameplay.test.ts"
+    "test:gameplay": "tsx lib/game-factory/theme-gameplay.test.ts",
+    "test:smoke": "node scripts/smoke-http.mjs"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.0.2",
