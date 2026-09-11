@@ -2,7 +2,28 @@
   "name": "naha-kids-game-factory",
   "version": "0.1.0",
   "private": true,
-  "scripts": {"dev": "next dev", "build": "next build", "start": "next start", "lint": "next lint"},
-  "dependencies": {"@neondatabase/serverless": "^1.0.2", "drizzle-orm": "^0.44.5", "next": "14.2.35", "qrcode": "^1.5.4", "react": "18.3.1", "react-dom": "18.3.1"},
-  "devDependencies": {"@types/node": "20.17.30", "@types/qrcode": "^1.5.5", "@types/react": "18.3.12", "@types/react-dom": "18.3.1", "typescript": "5.7.3"}
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "test:contracts": "tsx scripts/verify-contracts.mjs",
+    "test:gameplay": "tsx lib/game-factory/theme-gameplay.test.ts"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.0.2",
+    "drizzle-orm": "^0.44.5",
+    "next": "14.2.35",
+    "qrcode": "^1.5.4",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "20.17.30",
+    "@types/qrcode": "^1.5.5",
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "tsx": "^4.20.3",
+    "typescript": "5.7.3"
+  }
 }
