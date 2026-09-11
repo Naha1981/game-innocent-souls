@@ -1,4 +1,4 @@
-from worker.main import SpriteJob, magic_matches, source_path, validate_contract
+from worker.main import SpriteJob, authorized, magic_matches, source_path, validate_contract
 
 
 def valid_job() -> SpriteJob:
@@ -63,3 +63,15 @@ def test_image_magic_is_checked() -> None:
     assert magic_matches("image/png", b"\x89PNG\r\n\x1a\nrest")
     assert magic_matches("image/webp", b"RIFF0000WEBP")
     assert not magic_matches("image/png", b"not-a-png")
+
+
+def test_worker_authorization_fails_closed(monkeypatch) -> None:
+    monkeypatch.delenv("SPRITE_GEN_SHARED_SECRET", raising=False)
+    assert authorized(None) is False
+    assert authorized("anything") is False
+
+
+def test_worker_authorization_uses_configured_secret(monkeypatch) -> None:
+    monkeypatch.setenv("SPRITE_GEN_SHARED_SECRET", "test-secret")
+    assert authorized("test-secret") is True
+    assert authorized("wrong-secret") is False
