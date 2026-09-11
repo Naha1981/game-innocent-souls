@@ -69,6 +69,7 @@ if (!generationRoute.includes("order.status !== 'paid'")) throw new Error('Sprit
 if (!generationRoute.includes('order.sourceObjectRef') || !generationRoute.includes('order.generationRequestJson')) throw new Error('Sprite generation must consume server-bound order metadata, not client-submitted generation data.');
 if (!generationRoute.includes("status: 'paid'")) throw new Error('Generated paid games must persist as paid entitlements.');
 for (const invariant of ['claimGeneration(body.paymentId)', 'order.generationStatus === \'complete\'', 'order.generationStatus === \'running\'', 'markGenerationComplete(body.paymentId)', 'releaseGenerationClaim(body.paymentId)']) if (!generationRoute.includes(invariant)) throw new Error(`Generation route missing single-flight invariant: ${invariant}`);
+if (!generationRoute.includes('export const maxDuration = 300;')) throw new Error('Sprite generation route must remain within Vercel Hobby maximum duration.');
 
 const sourceRoute = fs.readFileSync(path.join(root, 'app/api/generation/source/route.ts'), 'utf8');
 for (const [name, route] of [['generation', generationRoute], ['source-photo', sourceRoute]]) {
@@ -100,6 +101,7 @@ if (!worker.includes('if not expected or not secret:')) throw new Error('Sprite 
 if (!worker.includes('hmac.compare_digest(secret, expected)')) throw new Error('Sprite worker authorization must use constant-time secret comparison.');
 if (!worker.includes('purge_expired_sources()')) throw new Error('Sprite worker must purge expired temporary child photos.');
 if (!worker.includes('base_source.unlink(missing_ok=True)')) throw new Error('Sprite worker must delete the consumed temporary source after generation.');
+if (!worker.includes('SPRITE_GEN_TIMEOUT_SECONDS", "240"')) throw new Error('Sprite worker default stage timeout must stay below the Vercel Hobby function ceiling.');
 
 const tsconfig = JSON.parse(fs.readFileSync(path.join(root, 'tsconfig.json'), 'utf8'));
 if (tsconfig.compilerOptions?.baseUrl !== '.') throw new Error('tsconfig must define baseUrl "." for @ alias resolution.');
@@ -110,4 +112,4 @@ if (packageJson.dependencies?.next !== '14.2.35') throw new Error(`Unexpected Ne
 for (const script of ['build', 'test:contracts', 'test:gameplay', 'test:generation', 'test:smoke']) if (!packageJson.scripts?.[script]) throw new Error(`Missing required npm script: ${script}`);
 
 console.log('NahaKids production contract checks: PASS');
-console.log(`Verified ${requiredFiles.length} required production files plus payment, paid-generation, single-flight, privacy, deletion and deployment invariants.`);
+console.log(`Verified ${requiredFiles.length} required production files plus payment, paid-generation, single-flight, privacy, deletion, runtime-duration and deployment invariants.`);
