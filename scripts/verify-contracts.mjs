@@ -112,7 +112,7 @@ if (tsconfig.compilerOptions?.baseUrl !== '.') throw new Error('tsconfig must de
 if (JSON.stringify(tsconfig.compilerOptions?.paths?.['@/*']) !== JSON.stringify(['./*'])) throw new Error('tsconfig must map @/* to ./* for production imports.');
 
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-if (packageJson.dependencies?.next !== '14.2.35') throw new Error(`Unexpected Next.js version: ${packageJson.dependencies?.next}`);
+if (packageJson.dependencies?.next !== '15.5.24') throw new Error(`Unexpected Next.js version: ${packageJson.dependencies?.next}`);
 for (const script of ['build', 'test:contracts', 'test:gameplay', 'test:generation', 'test:smoke']) if (!packageJson.scripts?.[script]) throw new Error(`Missing required npm script: ${script}`);
 
 console.log('NahaKids production contract checks: PASS');
