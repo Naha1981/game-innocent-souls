@@ -9,7 +9,7 @@ export async function GET(request: Request) {
   }
 
   const paymentId = new URL(request.url).searchParams.get('m_payment_id');
-  if (!paymentId || !/^[A-Za-z0-9_-]{1,100}$/.test(paymentId)) {
+  if (!paymentId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(paymentId)) {
     return NextResponse.json({ ok: false, code: 'INVALID_PAYMENT_ID' }, { status: 400 });
   }
 
@@ -20,9 +20,7 @@ export async function GET(request: Request) {
     return NextResponse.json({
       ok: true,
       paymentId: order.paymentId,
-      package: order.packageId,
       status: order.status,
-      jobId: order.jobId,
       paidAt: order.paidAt,
     }, { headers: { 'cache-control': 'no-store' } });
   } catch {
