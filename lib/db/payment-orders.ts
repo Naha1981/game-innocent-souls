@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { getDb } from './index';
 import { paymentOrders } from './schema';
 import type { NahaKidsPackage } from '../payfast';
@@ -22,13 +22,19 @@ export async function createPaymentOrder(input: {
 
 export async function markPaymentPaid(input: {
   paymentId: string;
+  packageId: NahaKidsPackage;
+  amountCents: number;
   pfPaymentId?: string;
 }) {
   const db = getDb();
   if (!db) throw new Error('DATABASE_NOT_CONFIGURED');
   const result = await db.update(paymentOrders)
     .set({ status: 'paid', pfPaymentId: input.pfPaymentId ?? null, paidAt: new Date() })
-    .where(eq(paymentOrders.paymentId, input.paymentId))
+    .where(and(
+      eq(paymentOrders.paymentId, input.paymentId),
+      eq(paymentOrders.packageId, input.packageId),
+      eq(paymentOrders.amountCents, input.amountCents),
+    ))
     .returning({ paymentId: paymentOrders.paymentId });
   return result.length === 1;
 }
