@@ -1,7 +1,8 @@
 'use client';
 
 import { ChangeEvent, useEffect, useMemo, useState } from 'react';
-import type { CharacterGenerationRequest } from '../lib/game-factory/types';
+import type { CharacterGenerationRequest, RuntimeManifest } from '../lib/game-factory/types';
+import { GAME_GOAL_STARS, FINISH_POSITION, PLAYER_START_POSITION, collectiblePosition, hasWon, isCollectibleHit, nextPlayerPosition } from '../lib/game-factory/gameplay';
 
 type Theme = { id: CharacterGenerationRequest['adventure']; name: string; line: string; icon: string };
 const themes: Theme[] = [
@@ -13,11 +14,6 @@ const themes: Theme[] = [
 
 const PHOTO_TTL_MS = 15 * 60 * 1000;
 type GenerationState = 'idle' | 'uploading' | 'generating' | 'succeeded' | 'error';
-type SpriteRect = { x: number; y: number; w: number; h: number };
-type RuntimeManifest = {
-  frame_layout?: { rows?: Record<string, SpriteRect[]>; sheetWidth?: number; sheetHeight?: number; cellWidth?: number; cellHeight?: number };
-  animation?: { rows?: Record<string, { durations_ms?: number[] }> };
-};
 type GeneratedAsset = { atlasDataUrl: string; manifest: RuntimeManifest };
 
 export default function Home() {
@@ -29,8 +25,9 @@ export default function Home() {
   const [consent, setConsent] = useState(false);
   const [created, setCreated] = useState(false);
   const [playing, setPlaying] = useState(false);
-  const [score, setScore] = useState(0);
-  const [position, setPosition] = useState(42);
+  const [gameWon, setGameWon] = useState(false);
+  const [starsCollected, setStarsCollected] = useState(0);
+  const [position, setPosition] = useState(PLAYER_START_POSITION);
   const [jobId, setJobId] = useState<string | null>(null);
   const [generationState, setGenerationState] = useState<GenerationState>('idle');
   const [generationError, setGenerationError] = useState<string | null>(null);
@@ -46,9 +43,19 @@ export default function Home() {
   const cellHeight = generatedAsset?.manifest.frame_layout?.cellHeight ?? 256;
   const sheetWidth = generatedAsset?.manifest.frame_layout?.sheetWidth ?? 1024;
   const sheetHeight = generatedAsset?.manifest.frame_layout?.sheetHeight ?? 1024;
+  const currentStarPosition = collectiblePosition(starsCollected);
 
   function clearGeneratedAsset() {
     setGeneratedAsset(null);
+    setAnimationState('idle');
+    setFrameIndex(0);
+  }
+
+  function resetGame() {
+    setPlaying(false);
+    setGameWon(false);
+    setStarsCollected(0);
+    setPosition(PLAYER_START_POSITION);
     setAnimationState('idle');
     setFrameIndex(0);
   }
@@ -64,7 +71,7 @@ export default function Home() {
     setPhotoFile(file);
     setPhotoMeta({ mimeType: file.type, sizeBytes: file.size, expiresAt: new Date(Date.now() + PHOTO_TTL_MS).toISOString() });
     setCreated(false);
-    setPlaying(false);
+    resetGame();
     setJobId(null);
     setSourceObjectRef(null);
     setGenerationState('idle');
@@ -86,9 +93,7 @@ export default function Home() {
 
     setJobId(request.jobId);
     setCreated(true);
-    setPlaying(false);
-    setScore(0);
-    setPosition(42);
+    resetGame();
     setGenerationError(null);
     clearGeneratedAsset();
     setGenerationState('uploading');
@@ -133,31 +138,43 @@ export default function Home() {
   }
 
   function play() {
+    if (!generatedAsset) return;
+    resetGame();
     setPlaying(true);
-    setScore(0);
-    setPosition(42);
-    setAnimationState('idle');
-    setFrameIndex(0);
   }
 
   function move(direction: -1 | 1) {
-    if (!playing) return;
-    setPosition(p => Math.max(8, Math.min(82, p + direction * 7)));
-    setScore(s => s + 1);
+    if (!playing || gameWon || !generatedAsset) return;
+    const nextPosition = nextPlayerPosition(position, direction);
+    setPosition(nextPosition);
     setAnimationState('walk');
+
+    if (isCollectibleHit(nextPosition, starsCollected)) {
+      const nextStars = starsCollected + 1;
+      setStarsCollected(nextStars);
+      setAnimationState('idle');
+      if (hasWon(nextStars, nextPosition)) {
+        setGameWon(true);
+        setAnimationState('celebrate');
+      }
+    } else if (starsCollected >= GAME_GOAL_STARS && hasWon(starsCollected, nextPosition)) {
+      setGameWon(true);
+      setAnimationState('celebrate');
+    }
   }
 
   function jump() {
-    if (!playing || !generatedAsset) return;
+    if (!playing || gameWon || !generatedAsset) return;
     setAnimationState('jump');
-    setScore(s => s + 2);
-    window.setTimeout(() => setAnimationState('idle'), 650);
+    window.setTimeout(() => {
+      setAnimationState(current => current === 'jump' ? 'idle' : current);
+    }, 650);
   }
 
   function celebrate() {
     if (!playing || !generatedAsset) return;
     setAnimationState('celebrate');
-    window.setTimeout(() => setAnimationState('idle'), 900);
+    if (!gameWon) window.setTimeout(() => setAnimationState(current => current === 'celebrate' ? 'idle' : current), 900);
   }
 
   useEffect(() => {
@@ -189,7 +206,7 @@ export default function Home() {
       setPhotoFile(null);
       setPhotoMeta(null);
       setCreated(false);
-      setPlaying(false);
+      resetGame();
       setConsent(false);
       setJobId(null);
       setSourceObjectRef(null);
@@ -205,7 +222,7 @@ export default function Home() {
     setPhotoFile(null);
     setPhotoMeta(null);
     setCreated(false);
-    setPlaying(false);
+    resetGame();
     setConsent(false);
     setJobId(null);
     setSourceObjectRef(null);
@@ -252,18 +269,21 @@ export default function Home() {
           <div className={`game-screen ${playing ? 'playing' : ''}`}>
             <div className="sun"/><div className="hill"/>
             <div className="game-label">{created ? `${selected.icon} ${name} — ${selected.name}` : 'YOUR CHILD — ADVENTURE'}</div>
-            <div className="collectible" style={{ left: `${Math.min(84, 18 + (score % 8) * 9)}%` }}>★</div>
+            {playing && !gameWon && <div className="collectible" style={{ left: `${currentStarPosition}%` }}>★</div>}
+            {playing && <div className="finish-gate" style={{ left: `${FINISH_POSITION}%` }} aria-label="Finish gate">🏁</div>}
             {generatedAsset && activeRect ? <div className="player generated-player" style={{ ...spriteStyle, left: `${position}%` }} aria-label="Generated child game character" /> : <div className="player" style={{ left: `${position}%` }} aria-label="Prototype player character" />}
-            {playing && <div className="score">STARS {score}</div>}
+            {playing && <div className="score">STARS {starsCollected}/{GAME_GOAL_STARS}</div>}
             {!created && <div className="screen-message">Create a hero to begin</div>}
-            {created && !playing && <button className="play-button" onClick={play}>▶ PLAY {name.toUpperCase()}</button>}
+            {created && generationState !== 'succeeded' && <div className="screen-message">{generationState === 'error' ? 'Generation needs attention' : 'Your real hero is being created…'}</div>}
+            {created && generationState === 'succeeded' && !playing && <button className="play-button" onClick={play}>▶ PLAY {name.toUpperCase()}</button>}
+            {gameWon && <div className="win-message"><strong>🎉 YOU DID IT!</strong><span>{name} collected {GAME_GOAL_STARS} stars.</span><button onClick={play}>PLAY AGAIN</button></div>}
           </div>
           {created ? <div className="pipeline-card">
             <div className="pipeline-head"><strong>Generation pipeline</strong><span>{generationLabel}</span></div>
             <div className="pipeline-grid"><span>Adventure<strong>{selected.name}</strong></span><span>Animations<strong>Idle · Walk · Jump · Celebrate</strong></span><span>Safety<strong>No biometric ID</strong></span><span>Source<strong>Temporary • deleted after generation</strong></span></div>
             <div className="pipeline-id">Job {jobId?.slice(0, 8)}…{sourceObjectRef ? ' • source secured' : ''}{generatedAsset ? ' • atlas loaded' : ''}</div>
           </div> : <div><div className="game-title">Your game appears here</div><div className="steps"><span className="step">PHOTO</span><span className="step">CHARACTER</span><span className="step">ANIMATION</span><span className="step">PLAY</span></div></div>}
-          {playing && <div className="controls"><div className="game-title">Help {name} collect stars!</div><div className="control-row"><button onClick={() => move(-1)} aria-label="Move left">←</button><button onClick={() => move(1)} aria-label="Move right">→</button><button onClick={jump} disabled={!generatedAsset}>JUMP</button><button onClick={celebrate} disabled={!generatedAsset}>CELEBRATE</button><button className="stop" onClick={() => setPlaying(false)}>STOP</button></div><div className="muted">Use ← → or A / D to move. Space / W jumps. C celebrates.</div></div>}
+          {playing && !gameWon && <div className="controls"><div className="game-title">{starsCollected >= GAME_GOAL_STARS ? `Reach the finish! ${FINISH_POSITION}%` : `Help ${name} collect ${GAME_GOAL_STARS} stars!`}</div><div className="control-row"><button onClick={() => move(-1)} aria-label="Move left">←</button><button onClick={() => move(1)} aria-label="Move right">→</button><button onClick={jump} disabled={!generatedAsset}>JUMP</button><button onClick={celebrate} disabled={!generatedAsset}>CELEBRATE</button><button className="stop" onClick={() => resetGame()}>STOP</button></div><div className="muted">Use ← → or A / D to move. Space / W jumps. C celebrates. Collect every star, then reach the flag.</div></div>}
         </div>
       </section>
       <footer className="footer">NahaLabs • Creche demo • No facial recognition • Browser preview expires after 15 minutes. Production source retention is worker-controlled and deletion is enforced after generation.</footer>
