@@ -39,6 +39,28 @@ export type SpriteAnimation = {
   loop: boolean;
 };
 
+export type RuntimeSpriteRect = {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+};
+
+export type RuntimeManifest = {
+  game_input?: string;
+  degraded_static_fallback?: boolean;
+  frame_layout?: {
+    rows?: Record<string, RuntimeSpriteRect[]>;
+    sheetWidth?: number;
+    sheetHeight?: number;
+    cellWidth?: number;
+    cellHeight?: number;
+  };
+  animation?: {
+    rows?: Record<string, { durations_ms?: number[] }>;
+  };
+};
+
 export type CharacterAssetManifest = {
   schemaVersion: '1.0';
   characterId: string;
