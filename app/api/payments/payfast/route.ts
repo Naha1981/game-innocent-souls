@@ -1,5 +1,8 @@
+import { randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { buildPayfastCheckout, isNahaKidsPackage, NAHAKIDS_PACKAGES } from '../../../../lib/payfast';
+import { createPaymentOrder } from '../../../../lib/db/payment-orders';
+import { paymentAmountCents, isUuid } from '../../../../lib/payments/order';
 
 export const runtime = 'nodejs';
 
@@ -17,20 +20,32 @@ export async function POST(request: Request) {
   if (!merchantId || !merchantKey || !passphrase) {
     return NextResponse.json({ ok: false, code: 'PAYFAST_NOT_CONFIGURED' }, { status: 503 });
   }
+  if (!process.env.DATABASE_URL?.trim()) {
+    return NextResponse.json({ ok: false, code: 'DATABASE_NOT_CONFIGURED' }, { status: 503 });
+  }
 
   try {
-    const body = await request.json() as { package?: unknown; paymentId?: unknown };
+    const body = await request.json() as { package?: unknown; paymentId?: unknown; jobId?: unknown };
     if (!isNahaKidsPackage(body.package)) {
       return NextResponse.json({ ok: false, code: 'INVALID_PACKAGE' }, { status: 400 });
+    }
+    if (body.jobId !== undefined && !isUuid(body.jobId)) {
+      return NextResponse.json({ ok: false, code: 'INVALID_JOB_ID' }, { status: 400 });
     }
 
     const paymentId = typeof body.paymentId === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(body.paymentId)
       ? body.paymentId
-      : crypto.randomUUID();
+      : randomUUID();
     const product = NAHAKIDS_PACKAGES[body.package];
+    await createPaymentOrder({
+      paymentId,
+      packageId: body.package,
+      amountCents: paymentAmountCents(product.amount),
+      jobId: typeof body.jobId === 'string' ? body.jobId : undefined,
+    });
+
     const baseUrl = publicBaseUrl(request);
     const testing = process.env.PAYFAST_SANDBOX === 'true';
-
     const fields = {
       merchant_id: merchantId,
       merchant_key: merchantKey,
@@ -42,6 +57,7 @@ export async function POST(request: Request) {
       item_name: product.itemName,
       item_description: product.description,
       custom_str1: body.package,
+      custom_str2: typeof body.jobId === 'string' ? body.jobId : '',
     };
 
     const checkout = buildPayfastCheckout(fields, passphrase);
@@ -53,7 +69,10 @@ export async function POST(request: Request) {
       action: testing ? 'https://sandbox.payfast.co.za/eng/process' : 'https://www.payfast.co.za/eng/process',
       fields: checkout,
     });
-  } catch {
-    return NextResponse.json({ ok: false, code: 'INVALID_JSON' }, { status: 400 });
+  } catch (error) {
+    if (error instanceof Error && error.message === 'DATABASE_NOT_CONFIGURED') {
+      return NextResponse.json({ ok: false, code: 'DATABASE_NOT_CONFIGURED' }, { status: 503 });
+    }
+    return NextResponse.json({ ok: false, code: 'PAYMENT_ORDER_FAILED' }, { status: 500 });
   }
 }
