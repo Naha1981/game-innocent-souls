@@ -7,7 +7,7 @@ import { markGamePaid } from '../../../../../lib/db/game-records';
 
 export const runtime = 'nodejs';
 
-const PAYFAST_HOSTS = new Set(['www.payfast.co.za', 'w1w.payfast.co.za', 'w2w.payfast.co.za', 'sandbox.payfast.co.za']);
+const PAYFAST_HOSTS = ['www.payfast.co.za', 'w1w.payfast.co.za', 'w2w.payfast.co.za', 'sandbox.payfast.co.za'] as const;
 
 function signatureForItn(fields: Array<[string, string]>, passphrase: string): string {
   const pairs = fields.filter(([key, value]) => key !== 'signature' && value !== '').map(([key, value]) => `${key}=${encodeURIComponent(value.trim()).replace(/%20/g, '+')}`);
