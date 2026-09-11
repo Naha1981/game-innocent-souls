@@ -5,9 +5,9 @@ import { useState } from 'react';
 type PackageId = 'starter' | 'hero' | 'family';
 
 const packages: Array<{ id: PackageId; name: string; price: string; description: string }> = [
-  { id: 'starter', name: 'Starter', price: 'R499', description: '1 child • personalised character • 1 mini-game' },
-  { id: 'hero', name: 'Hero', price: 'R999', description: 'Character • 5–8 animations • environment • mini-game' },
-  { id: 'family', name: 'Family', price: 'R1,999', description: 'Up to 4 children • family game experience' },
+  { id: 'starter', name: 'Mini', price: 'R199', description: '1 child • personalised character • tiny mini-game' },
+  { id: 'hero', name: 'Hero', price: 'R499', description: 'Character • 5–8 animations • environment • proper mini-game' },
+  { id: 'family', name: 'Family', price: 'R999', description: 'Up to 4 children • expanded family game experience' },
 ];
 
 export default function PayPage() {
@@ -50,7 +50,7 @@ export default function PayPage() {
       <div style={{ maxWidth: 700 }}>
         <p style={{ letterSpacing: '.12em', fontWeight: 800, fontSize: 12 }}>NAHALABS / NAHAKIDS</p>
         <h1 style={{ fontSize: 'clamp(36px, 7vw, 64px)', lineHeight: 1, margin: '16px 0' }}>Give your child their own game.</h1>
-        <p style={{ fontSize: 18, lineHeight: 1.6 }}>Choose a package and continue securely to Payfast. Payment confirmation is accepted only from the verified Payfast ITN—not from the browser return page.</p>
+        <p style={{ fontSize: 18, lineHeight: 1.6 }}>Start at R199, or make the full personalised Hero game for R499. Every paid game can become a new chapter in your child’s story later.</p>
       </div>
 
       <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))', gap: 16, marginTop: 36 }}>
@@ -64,6 +64,11 @@ export default function PayPage() {
             </button>
           </article>
         ))}
+      </section>
+
+      <section style={{ marginTop: 32, padding: 24, borderRadius: 20, background: '#f3f7ef', border: '1px solid #dfe5dc' }}>
+        <strong>Add another chapter later — R100</strong>
+        <p style={{ lineHeight: 1.5, marginBottom: 0 }}>New outfit, sport, adventure, birthday, school milestone or another memory. We generate it as a new episode without needing to identify your child from a photo.</p>
       </section>
 
       {error && <p role="alert" style={{ marginTop: 20 }}>Payment setup: {error}</p>}
