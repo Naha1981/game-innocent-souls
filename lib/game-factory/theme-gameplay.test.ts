@@ -7,10 +7,14 @@ for (const adventure of adventures) {
   if (spec.adventure !== adventure) throw new Error(`Theme mismatch for ${adventure}`);
   if (spec.goalCount !== 5) throw new Error(`Unexpected goal count for ${adventure}`);
   if (spec.goalPosition !== 78) throw new Error(`Unexpected goal position for ${adventure}`);
-  if (!spec.objective || !spec.collectible || !spec.finish) throw new Error(`Incomplete theme spec for ${adventure}`);
+  if (!spec.objective || !spec.collectible || !spec.finish || !spec.actionLabel || !spec.actionHint) throw new Error(`Incomplete theme spec for ${adventure}`);
 }
 
 if (THEME_GAMEPLAY.racer.timeLimitSeconds !== 30) throw new Error('Racer must have a 30 second time limit.');
 if (THEME_GAMEPLAY.football.actionLabel !== 'KICK') throw new Error('Football action must be KICK.');
 if (THEME_GAMEPLAY.hero.actionLabel !== 'RESCUE') throw new Error('Hero action must be RESCUE.');
+if (THEME_GAMEPLAY.racer.actionLabel !== 'BOOST') throw new Error('Racer action must be BOOST.');
 if (THEME_GAMEPLAY.space.actionLabel !== 'LAUNCH') throw new Error('Space action must be LAUNCH.');
+if (THEME_GAMEPLAY.football.collectible !== '⚽') throw new Error('Football collectible must be a football.');
+if (THEME_GAMEPLAY.racer.collectible !== '🏁') throw new Error('Racer collectible must be a checkpoint flag.');
+if (THEME_GAMEPLAY.space.finish !== '🌀') throw new Error('Space finish must be the launch portal.');
