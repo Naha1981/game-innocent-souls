@@ -25,6 +25,7 @@ jobs:
       - run: npm install
       - run: npm run test:contracts
       - run: npm run test:gameplay
+      - run: npm run test:generation
       - run: npm run build
       - run: npm run test:smoke
 
@@ -38,6 +39,7 @@ jobs:
           node-version: '24'
       - run: npm install
       - run: npm run test:contracts
+      - run: npm run test:generation
       - run: npm run build
       - run: npm run test:smoke
 
