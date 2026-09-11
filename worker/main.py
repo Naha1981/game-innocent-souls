@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import base64
+import hashlib
+import hmac
 import json
 import os
 import shutil
@@ -15,21 +18,19 @@ from fastapi import FastAPI, File, Header, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-
 Provider = Literal["codex", "grok"]
 Adventure = Literal["football", "hero", "racer", "space"]
 SOURCE_MAX_BYTES = 8_000_000
 SOURCE_TTL_SECONDS = 15 * 60
 ALLOWED_MIME = {"image/jpeg", "image/png", "image/webp"}
 ATLAS_MAX_BYTES = 8_000_000
-
+CLEANUP_INTERVAL_SECONDS = 60
 
 class SourcePhoto(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["temporary-child-photo"]
     mimeType: str = Field(min_length=1, max_length=100)
     sizeBytes: int = Field(gt=0, le=SOURCE_MAX_BYTES)
-
 
 class SpriteJob(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -44,9 +45,8 @@ class SpriteJob(BaseModel):
     retention: dict
     sourceObjectRef: str | None = None
 
-
-app = FastAPI(title="NahaKids Sprite Generation Worker", version="0.3.0")
-
+app = FastAPI(title="NahaKids Sprite Generation Worker", version="0.4.0")
+cleanup_task: asyncio.Task | None = None
 
 def config() -> dict[str, object]:
     root = os.getenv("SPRITE_GEN_ROOT")
@@ -54,21 +54,20 @@ def config() -> dict[str, object]:
     timeout = int(os.getenv("SPRITE_GEN_TIMEOUT_SECONDS", "900"))
     source_root = os.getenv("SPRITE_GEN_SOURCE_ROOT") or str(Path(tempfile.gettempdir()) / "nahakids-source")
     return {"configured": bool(root and Path(root).is_absolute()), "provider": provider,
-            "timeoutSeconds": timeout, "root": root, "sourceRoot": source_root}
-
+            "timeoutSeconds": timeout, "root": root, "sourceRoot": source_root,
+            "secretConfigured": bool(os.getenv("SPRITE_GEN_SHARED_SECRET"))}
 
 def safe_log(event: str, **fields: object) -> None:
     print(json.dumps({"event": event, **fields}, separators=(",", ":"), sort_keys=True), flush=True)
 
-
 def error(code: str, message: str, status: int) -> JSONResponse:
     return JSONResponse({"ok": False, "code": code, "message": message}, status_code=status)
 
-
 def authorized(secret: str | None) -> bool:
     expected = os.getenv("SPRITE_GEN_SHARED_SECRET")
-    return not expected or secret == expected
-
+    if not expected or not secret:
+        return False
+    return hmac.compare_digest(secret, expected)
 
 def source_root() -> Path:
     root = Path(str(config()["sourceRoot"]))
@@ -77,6 +76,20 @@ def source_root() -> Path:
     root.mkdir(parents=True, exist_ok=True)
     return root
 
+def purge_expired_sources() -> int:
+    root = source_root()
+    cutoff = time.time() - SOURCE_TTL_SECONDS
+    deleted = 0
+    for candidate in root.glob("*.source"):
+        try:
+            if candidate.stat().st_mtime < cutoff:
+                candidate.unlink(missing_ok=True)
+                deleted += 1
+        except OSError:
+            continue
+    if deleted:
+        safe_log("expired_sources_purged", count=deleted)
+    return deleted
 
 def source_path(source_ref: str) -> Path:
     if not source_ref.startswith("tmp://"):
@@ -88,7 +101,6 @@ def source_path(source_ref: str) -> Path:
         raise ValueError("INVALID_SOURCE_OBJECT_REF") from exc
     return source_root() / f"{token}.source"
 
-
 def validate_contract(job: SpriteJob) -> str | None:
     if job.character.get("identityLock") != "stylised-only":
         return "identityLock must be stylised-only"
@@ -97,7 +109,10 @@ def validate_contract(job: SpriteJob) -> str | None:
     if job.retention.get("sourcePhoto") != "delete-after-generation":
         return "sourcePhoto retention must be delete-after-generation"
     expected = {"idle": 4, "walk": 6, "jump": 4, "celebrate": 6}
-    received = {str(item.get("id")): int(item.get("frames", 0)) for item in job.states}
+    try:
+        received = {str(item.get("id")): int(item.get("frames", 0)) for item in job.states}
+    except (TypeError, ValueError):
+        return "states must match the canonical animation contract"
     if received != expected:
         return "states must match the canonical animation contract"
     if job.atlas.get("format") != "png" or job.atlas.get("transparentBackground") is not True:
@@ -105,7 +120,6 @@ def validate_contract(job: SpriteJob) -> str | None:
     if not job.sourceObjectRef:
         return "sourceObjectRef is required"
     return None
-
 
 def locate_cli(root: Path) -> Path:
     for candidate in (root / ".venv" / "bin" / "sprite-gen",
@@ -115,7 +129,6 @@ def locate_cli(root: Path) -> Path:
             return candidate
     raise FileNotFoundError("sprite-gen executable not found in the configured .venv")
 
-
 def magic_matches(mime: str, data: bytes) -> bool:
     if mime == "image/jpeg":
         return data.startswith(b"\xff\xd8\xff")
@@ -124,7 +137,6 @@ def magic_matches(mime: str, data: bytes) -> bool:
     if mime == "image/webp":
         return len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP"
     return False
-
 
 def canonical_request(job: SpriteJob) -> dict:
     states = {}
@@ -153,13 +165,11 @@ def canonical_request(job: SpriteJob) -> dict:
         "layout": "taxonomy/v1",
     }
 
-
 def run_pipeline(job: SpriteJob, run_dir: Path, cli: Path, base_source: Path) -> dict:
     base_target = run_dir / "base-source.png"
     shutil.copyfile(base_source, base_target)
     request_path = run_dir / "sprite-request.json"
     request_path.write_text(json.dumps(canonical_request(job), indent=2), encoding="utf-8")
-
     commands = [
         [str(cli), "prepare", "--out-dir", str(run_dir), "--character-id", job.jobId,
          "--base-image", str(base_target), "--request", str(request_path)],
@@ -172,13 +182,11 @@ def run_pipeline(job: SpriteJob, run_dir: Path, cli: Path, base_source: Path) ->
     for index, command in enumerate(commands, start=1):
         safe_log("pipeline_stage_start", jobId=job.jobId, stage=index)
         started = time.monotonic()
-        completed = subprocess.run(command, cwd=run_dir, capture_output=True, text=True,
-                                   timeout=timeout, check=False)
-        safe_log("pipeline_stage_finish", jobId=job.jobId, stage=index,
-                 exitCode=completed.returncode, elapsedSeconds=round(time.monotonic() - started, 3))
+        completed = subprocess.run(command, cwd=run_dir, capture_output=True, text=True, timeout=timeout, check=False)
+        safe_log("pipeline_stage_finish", jobId=job.jobId, stage=index, exitCode=completed.returncode,
+                 elapsedSeconds=round(time.monotonic() - started, 3))
         if completed.returncode != 0:
             raise RuntimeError(f"SPRITE_GEN_STAGE_FAILED:{index}")
-
     manifest = run_dir / "manifest.json"
     atlas = run_dir / "sprite-sheet-alpha.png"
     if not manifest.is_file() or not atlas.is_file() or manifest.stat().st_size == 0 or atlas.stat().st_size == 0:
@@ -202,17 +210,32 @@ def run_pipeline(job: SpriteJob, run_dir: Path, cli: Path, base_source: Path) ->
     atlas_bytes = atlas.read_bytes()
     if not magic_matches("image/png", atlas_bytes):
         raise RuntimeError("INVALID_GENERATOR_ATLAS")
-    return {
-        "manifest": data,
-        "atlas": {
-            "mimeType": "image/png",
-            "encoding": "base64",
-            "data": base64.b64encode(atlas_bytes).decode("ascii"),
-            "sizeBytes": len(atlas_bytes),
-        },
-        "atlasReady": True,
-    }
+    return {"manifest": data, "atlas": {"mimeType": "image/png", "encoding": "base64",
+            "data": base64.b64encode(atlas_bytes).decode("ascii"), "sizeBytes": len(atlas_bytes)}, "atlasReady": True}
 
+@app.on_event("startup")
+async def start_cleanup_loop() -> None:
+    global cleanup_task
+    purge_expired_sources()
+    async def loop() -> None:
+        while True:
+            await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
+            try:
+                purge_expired_sources()
+            except Exception:
+                safe_log("expired_source_cleanup_failed")
+    cleanup_task = asyncio.create_task(loop())
+
+@app.on_event("shutdown")
+async def stop_cleanup_loop() -> None:
+    global cleanup_task
+    if cleanup_task:
+        cleanup_task.cancel()
+        try:
+            await cleanup_task
+        except asyncio.CancelledError:
+            pass
+        cleanup_task = None
 
 @app.get("/health")
 def health() -> dict:
@@ -224,18 +247,16 @@ def health() -> dict:
             executable_ready = locate_cli(Path(root)).is_file()
         except FileNotFoundError:
             pass
-    return {"ok": True, "service": "sprite-generation-worker",
-            "generatorConfigured": bool(cfg["configured"]),
-            "generatorExecutableReady": executable_ready, "provider": cfg["provider"]}
-
+    return {"ok": True, "service": "sprite-generation-worker", "generatorConfigured": bool(cfg["configured"]),
+            "generatorExecutableReady": executable_ready, "provider": cfg["provider"], "secretConfigured": bool(cfg["secretConfigured"])}
 
 @app.post("/source-photo")
 async def upload_source_photo(file: UploadFile = File(...), x_worker_secret: str | None = Header(default=None)) -> JSONResponse:
     if not authorized(x_worker_secret):
         return error("UNAUTHORIZED", "Worker authorization failed.", 401)
+    purge_expired_sources()
     if file.content_type not in ALLOWED_MIME:
         return error("UNSUPPORTED_SOURCE_TYPE", "Only JPEG, PNG, and WebP images are accepted.", 415)
-
     token = uuid.uuid4().hex
     destination = source_root() / f"{token}.source"
     size = 0
@@ -270,7 +291,6 @@ async def upload_source_photo(file: UploadFile = File(...), x_worker_secret: str
     finally:
         await file.close()
 
-
 @app.post("/generate")
 async def generate(payload: dict, x_worker_secret: str | None = Header(default=None)) -> JSONResponse:
     if not authorized(x_worker_secret):
@@ -279,7 +299,6 @@ async def generate(payload: dict, x_worker_secret: str | None = Header(default=N
         job = SpriteJob.model_validate(payload)
     except ValidationError:
         return error("INVALID_GENERATION_REQUEST", "Generation contract validation failed.", 400)
-
     contract_error = validate_contract(job)
     if contract_error:
         return error("SAFETY_POLICY_VIOLATION", contract_error, 400)
@@ -292,7 +311,6 @@ async def generate(payload: dict, x_worker_secret: str | None = Header(default=N
     if base_source.stat().st_mtime + SOURCE_TTL_SECONDS < time.time():
         base_source.unlink(missing_ok=True)
         return error("SOURCE_EXPIRED", "Temporary source-photo reference has expired.", 410)
-
     cfg = config()
     root = cfg["root"]
     if not root or not Path(root).is_absolute():
@@ -301,12 +319,10 @@ async def generate(payload: dict, x_worker_secret: str | None = Header(default=N
         cli = locate_cli(Path(root))
     except FileNotFoundError:
         return error("GENERATOR_NOT_READY", "sprite-gen executable is missing from its dedicated environment.", 503)
-
     work_root = os.getenv("SPRITE_GEN_WORK_ROOT")
     parent = Path(work_root) if work_root else None
     if parent and not parent.is_absolute():
         return error("INVALID_WORK_ROOT", "SPRITE_GEN_WORK_ROOT must be absolute.", 500)
-
     run_dir: Path | None = None
     try:
         run_dir = Path(tempfile.mkdtemp(prefix=f"nahakids-{job.jobId}-", dir=str(parent) if parent else None))
