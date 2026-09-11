@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getGameRecord } from '../../../../lib/db/game-records';
+import { deleteGameRecord, getGameRecord } from '../../../../lib/db/game-records';
 import { isUuid } from '../../../../lib/payments/order';
 
 export const runtime = 'nodejs';
@@ -29,5 +29,22 @@ export async function GET(request: Request, { params }: { params: { jobId: strin
     }, { headers: { 'cache-control': 'no-store' } });
   } catch {
     return NextResponse.json({ ok: false, code: 'GAME_LOAD_FAILED' }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: Request, { params }: { params: { jobId: string } }) {
+  const secret = process.env.GAME_ADMIN_DELETE_SECRET?.trim();
+  if (!secret) return NextResponse.json({ ok: false, code: 'DELETE_NOT_CONFIGURED' }, { status: 503 });
+  if (!isUuid(params.jobId)) return NextResponse.json({ ok: false, code: 'INVALID_JOB_ID' }, { status: 400 });
+  if (request.headers.get('x-admin-delete-secret') !== secret) return NextResponse.json({ ok: false, code: 'UNAUTHORIZED' }, { status: 401 });
+  if (!process.env.DATABASE_URL?.trim()) return NextResponse.json({ ok: false, code: 'DATABASE_NOT_CONFIGURED' }, { status: 503 });
+
+  try {
+    const existing = await getGameRecord(params.jobId);
+    if (!existing) return NextResponse.json({ ok: false, code: 'GAME_NOT_FOUND' }, { status: 404 });
+    await deleteGameRecord(params.jobId);
+    return new NextResponse(null, { status: 204 });
+  } catch {
+    return NextResponse.json({ ok: false, code: 'GAME_DELETE_FAILED' }, { status: 500 });
   }
 }
