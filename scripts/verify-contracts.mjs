@@ -69,6 +69,9 @@ if (!generationRoute.includes("order.status !== 'paid'")) throw new Error('Sprit
 if (!generationRoute.includes('order.sourceObjectRef') || !generationRoute.includes('order.generationRequestJson')) throw new Error('Sprite generation must consume server-bound order metadata, not client-submitted generation data.');
 if (!generationRoute.includes("status: 'paid'")) throw new Error('Generated paid games must persist as paid entitlements.');
 for (const invariant of ['claimGeneration(body.paymentId)', 'order.generationStatus === \'complete\'', 'order.generationStatus === \'running\'', 'markGenerationComplete(body.paymentId)', 'releaseGenerationClaim(body.paymentId)']) if (!generationRoute.includes(invariant)) throw new Error(`Generation route missing single-flight invariant: ${invariant}`);
+if (!generationRoute.includes('getGameRecord')) throw new Error('Generation route must reconcile an already-persisted game after an interrupted finalization.');
+if (!generationRoute.includes('existingGame?.status === \'paid\'')) throw new Error('Generation recovery must only reconcile a paid game record.');
+if (!generationRoute.includes('recovered: true')) throw new Error('Generation recovery must explicitly report a recovered durable game.');
 if (!generationRoute.includes('export const maxDuration = 300;')) throw new Error('Sprite generation route must remain within Vercel Hobby maximum duration.');
 
 const sourceRoute = fs.readFileSync(path.join(root, 'app/api/generation/source/route.ts'), 'utf8');
@@ -113,7 +116,8 @@ if (JSON.stringify(tsconfig.compilerOptions?.paths?.['@/*']) !== JSON.stringify(
 
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 if (packageJson.dependencies?.next !== '15.5.24') throw new Error(`Unexpected Next.js version: ${packageJson.dependencies?.next}`);
+for (const dependency of ['eslint', 'eslint-config-next']) if (!packageJson.devDependencies?.[dependency]) throw new Error(`Missing lint dependency: ${dependency}`);
 for (const script of ['build', 'test:contracts', 'test:gameplay', 'test:generation', 'test:smoke']) if (!packageJson.scripts?.[script]) throw new Error(`Missing required npm script: ${script}`);
 
 console.log('NahaKids production contract checks: PASS');
-console.log(`Verified ${requiredFiles.length} required production files plus payment, paid-generation, single-flight, privacy, deletion, runtime-duration and deployment invariants.`);
+console.log(`Verified ${requiredFiles.length} required production files plus payment, paid-generation, single-flight, recovery, privacy, deletion, runtime-duration and deployment invariants.`);
