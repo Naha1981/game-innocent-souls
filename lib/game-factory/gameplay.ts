@@ -9,12 +9,17 @@ export function collectiblePosition(starsCollected: number): number {
   return Math.min(84, 18 + (starsCollected % 8) * 9);
 }
 
-export function isCollectibleHit(playerPosition: number, starsCollected: number): boolean {
-  return Math.abs(playerPosition - collectiblePosition(starsCollected)) <= STAR_HIT_DISTANCE;
+export function isCollectibleHit(playerPosition: number, starsCollected: number, hitDistance = STAR_HIT_DISTANCE): boolean {
+  return Math.abs(playerPosition - collectiblePosition(starsCollected)) <= hitDistance;
 }
 
-export function hasWon(starsCollected: number, playerPosition: number): boolean {
-  return starsCollected >= GAME_GOAL_STARS && playerPosition >= FINISH_POSITION;
+export function hasWon(
+  starsCollected: number,
+  playerPosition: number,
+  goalCount = GAME_GOAL_STARS,
+  goalPosition = FINISH_POSITION,
+): boolean {
+  return starsCollected >= goalCount && playerPosition >= goalPosition;
 }
 
 export function nextPlayerPosition(current: number, direction: -1 | 1): number {
