@@ -30,20 +30,24 @@ if (fs.existsSync(duplicatePaymentImplementation)) {
 }
 
 const paymentOrders = fs.readFileSync(path.join(root, 'lib/db/payment-orders.ts'), 'utf8');
-if (!paymentOrders.includes("and(eq(paymentOrders.paymentId, input.paymentId)")) {
-  throw new Error('Payment-order update must atomically match paymentId, packageId and amountCents.');
-}
-if (!paymentOrders.includes('eq(paymentOrders.packageId, input.packageId)')) {
-  throw new Error('Payment-order update is missing packageId protection.');
-}
-if (!paymentOrders.includes('eq(paymentOrders.amountCents, input.amountCents)')) {
-  throw new Error('Payment-order update is missing amountCents protection.');
+for (const invariant of [
+  'eq(paymentOrders.paymentId, input.paymentId)',
+  'eq(paymentOrders.packageId, input.packageId)',
+  'eq(paymentOrders.amountCents, input.amountCents)',
+  "ne(paymentOrders.status, 'paid')",
+]) {
+  if (!paymentOrders.includes(invariant)) {
+    throw new Error(`Payment-order update is missing invariant: ${invariant}`);
+  }
 }
 
 const itnRoute = fs.readFileSync(path.join(root, 'app/api/payments/payfast/itn/route.ts'), 'utf8');
 if (!itnRoute.includes('markPaymentPaid({')) throw new Error('PayFast ITN must use the active payment-order transition.');
 if (!itnRoute.includes('packageId,')) throw new Error('PayFast ITN must pass the verified packageId to the payment transition.');
 if (!itnRoute.includes('amountCents,')) throw new Error('PayFast ITN must pass the verified amountCents to the payment transition.');
+if (!itnRoute.includes('const current = await getPaymentOrder(paymentId)')) {
+  throw new Error('PayFast ITN must tolerate a concurrent duplicate callback after another callback has completed the payment.');
+}
 
 const tsconfig = JSON.parse(fs.readFileSync(path.join(root, 'tsconfig.json'), 'utf8'));
 if (tsconfig.compilerOptions?.baseUrl !== '.') throw new Error('tsconfig must define baseUrl "." for @ alias resolution.');
