@@ -1,23 +1,46 @@
-name: CI
+name: NahaKids Engineering Gate
 
 on:
   push:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   web:
+    name: Web / Node ${{ matrix.node-version }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['20', '24', '26']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm install
+      - run: npm run test:contracts
+      - run: npm run test:gameplay
+      - run: npm run build
+
+  windows-build:
+    name: Windows / Node 24 build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm install
+      - run: npm run test:contracts
       - run: npm run build
 
   worker:
+    name: Sprite worker / Python 3.12
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
