@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { NextResponse } from 'next/server';
 import { NAHAKIDS_PACKAGES } from '../../../../../lib/payfast';
+import { getPaymentOrder, markPaymentPaid } from '../../../../../lib/db/payment-orders';
 
 export const runtime = 'nodejs';
 
@@ -38,6 +39,7 @@ export async function POST(request: Request) {
   const merchantId = process.env.PAYFAST_MERCHANT_ID?.trim();
   const passphrase = process.env.PAYFAST_PASSPHRASE?.trim();
   if (!merchantId || !passphrase) return new NextResponse('Not configured', { status: 503 });
+  if (!process.env.DATABASE_URL?.trim()) return new NextResponse('Not configured', { status: 503 });
 
   try {
     const raw = await request.text();
@@ -78,13 +80,22 @@ export async function POST(request: Request) {
     const validation = (await validationResponse.text()).trim();
     if (!validationResponse.ok || validation !== 'VALID') return new NextResponse('Payfast validation failed', { status: 400 });
 
-    // MVP fulfillment sink. Do not grant paid entitlements from the browser return URL.
-    // The verified ITN is the authoritative payment event. Durable order storage will be added
-    // when the product account/entitlement layer is introduced.
+    const order = await getPaymentOrder(paymentId);
+    if (!order || order.packageId !== packageId || order.amountCents !== Math.round(Number(gross) * 100)) {
+      return new NextResponse('Unknown payment order', { status: 404 });
+    }
+
+    // Idempotent: repeated valid ITNs simply confirm the already-paid order.
+    if (order.status !== 'paid') {
+      const updated = await markPaymentPaid({ paymentId, pfPaymentId: params.get('pf_payment_id') ?? undefined });
+      if (!updated) return new NextResponse('Payment order update failed', { status: 500 });
+    }
+
     console.info(JSON.stringify({
       type: 'nahakids.payment.completed',
       paymentId,
       package: packageId,
+      jobId: order.jobId,
       pfPaymentId: params.get('pf_payment_id'),
       amount: gross,
     }));
