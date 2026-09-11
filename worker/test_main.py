@@ -1,4 +1,4 @@
-from worker.main import SpriteJob, validate_contract
+from worker.main import SpriteJob, magic_matches, source_path, validate_contract
 
 
 def valid_job() -> SpriteJob:
@@ -8,11 +8,7 @@ def valid_job() -> SpriteJob:
             "jobId": "job-12345678",
             "adventure": "football",
             "provider": "codex",
-            "source": {
-                "kind": "temporary-child-photo",
-                "mimeType": "image/jpeg",
-                "sizeBytes": 120_000,
-            },
+            "source": {"kind": "temporary-child-photo", "mimeType": "image/jpeg", "sizeBytes": 120_000},
             "character": {
                 "style": "friendly-2d-game-character",
                 "identityLock": "stylised-only",
@@ -26,6 +22,7 @@ def valid_job() -> SpriteJob:
             ],
             "atlas": {"format": "png", "transparentBackground": True},
             "retention": {"sourcePhoto": "delete-after-generation"},
+            "sourceObjectRef": "tmp://1234567890abcdef1234567890abcdef",
         }
     )
 
@@ -46,7 +43,23 @@ def test_non_canonical_animation_counts_are_rejected() -> None:
     assert validate_contract(job) is not None
 
 
-def test_source_photo_reference_is_optional_at_schema_boundary() -> None:
-    # The API deliberately rejects generation without the reference, but contract
-    # validation can remain independent from the deployment-specific object store.
-    assert valid_job().sourceObjectRef is None
+def test_source_reference_is_required() -> None:
+    job = valid_job()
+    job.sourceObjectRef = None
+    assert validate_contract(job) is not None
+
+
+def test_source_reference_cannot_escape_source_root() -> None:
+    try:
+        source_path("/tmp/child.jpg")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("path traversal-style source reference was accepted")
+
+
+def test_image_magic_is_checked() -> None:
+    assert magic_matches("image/jpeg", b"\xff\xd8\xff\xe0")
+    assert magic_matches("image/png", b"\x89PNG\r\n\x1a\nrest")
+    assert magic_matches("image/webp", b"RIFF0000WEBP")
+    assert not magic_matches("image/png", b"not-a-png")
