@@ -5,6 +5,7 @@ export const paymentOrders = pgTable('payment_orders', {
   packageId: text('package_id').notNull(),
   amountCents: integer('amount_cents').notNull(),
   status: text('status').notNull().default('pending'),
+  generationStatus: text('generation_status').notNull().default('pending'),
   jobId: text('job_id'),
   sourceObjectRef: text('source_object_ref'),
   generationRequestJson: text('generation_request_json'),
