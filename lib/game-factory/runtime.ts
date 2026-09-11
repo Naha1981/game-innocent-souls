@@ -29,7 +29,11 @@ export function getRuntimeRects(manifest: RuntimeManifest, state: RuntimeState):
 
 export function getRuntimeDuration(manifest: RuntimeManifest, state: RuntimeState, index: number): number {
   const duration = manifest.animation?.rows?.[state]?.durations_ms?.[index];
-  return Number.isFinite(duration) && duration > 0 ? duration : state === 'idle' ? 250 : 125;
+  return typeof duration === 'number' && Number.isFinite(duration) && duration > 0
+    ? duration
+    : state === 'idle'
+      ? 250
+      : 125;
 }
 
 export function clampPlayerPosition(value: number): number {
