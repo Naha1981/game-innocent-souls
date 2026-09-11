@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
@@ -20,6 +21,7 @@ Adventure = Literal["football", "hero", "racer", "space"]
 SOURCE_MAX_BYTES = 8_000_000
 SOURCE_TTL_SECONDS = 15 * 60
 ALLOWED_MIME = {"image/jpeg", "image/png", "image/webp"}
+ATLAS_MAX_BYTES = 8_000_000
 
 
 class SourcePhoto(BaseModel):
@@ -43,7 +45,7 @@ class SpriteJob(BaseModel):
     sourceObjectRef: str | None = None
 
 
-app = FastAPI(title="NahaKids Sprite Generation Worker", version="0.2.1")
+app = FastAPI(title="NahaKids Sprite Generation Worker", version="0.3.0")
 
 
 def config() -> dict[str, object]:
@@ -181,10 +183,35 @@ def run_pipeline(job: SpriteJob, run_dir: Path, cli: Path, base_source: Path) ->
     atlas = run_dir / "sprite-sheet-alpha.png"
     if not manifest.is_file() or not atlas.is_file() or manifest.stat().st_size == 0 or atlas.stat().st_size == 0:
         raise RuntimeError("INVALID_GENERATOR_OUTPUT")
+    if atlas.stat().st_size > ATLAS_MAX_BYTES:
+        raise RuntimeError("ATLAS_TOO_LARGE")
     data = json.loads(manifest.read_text(encoding="utf-8"))
     if not isinstance(data, dict) or not data.get("frame_layout"):
         raise RuntimeError("INVALID_GENERATOR_MANIFEST")
-    return {"manifest": data, "atlasReady": True}
+    layout = data["frame_layout"]
+    rows = layout.get("rows") if isinstance(layout, dict) else None
+    if not isinstance(rows, dict) or not rows:
+        raise RuntimeError("INVALID_GENERATOR_FRAME_LAYOUT")
+    for state in ("idle", "walk", "jump", "celebrate"):
+        rects = rows.get(state)
+        if not isinstance(rects, list) or not rects:
+            raise RuntimeError(f"INVALID_GENERATOR_FRAME_ROW:{state}")
+        for rect in rects:
+            if not isinstance(rect, dict) or not all(k in rect for k in ("x", "y", "w", "h")):
+                raise RuntimeError(f"INVALID_GENERATOR_FRAME_RECT:{state}")
+    atlas_bytes = atlas.read_bytes()
+    if not magic_matches("image/png", atlas_bytes):
+        raise RuntimeError("INVALID_GENERATOR_ATLAS")
+    return {
+        "manifest": data,
+        "atlas": {
+            "mimeType": "image/png",
+            "encoding": "base64",
+            "data": base64.b64encode(atlas_bytes).decode("ascii"),
+            "sizeBytes": len(atlas_bytes),
+        },
+        "atlasReady": True,
+    }
 
 
 @app.get("/health")
@@ -285,7 +312,7 @@ async def generate(payload: dict, x_worker_secret: str | None = Header(default=N
         run_dir = Path(tempfile.mkdtemp(prefix=f"nahakids-{job.jobId}-", dir=str(parent) if parent else None))
         safe_log("job_started", jobId=job.jobId, adventure=job.adventure, provider=job.provider)
         result = run_pipeline(job, run_dir, cli, base_source)
-        safe_log("job_succeeded", jobId=job.jobId)
+        safe_log("job_succeeded", jobId=job.jobId, atlasBytes=result["atlas"]["sizeBytes"])
         return JSONResponse({"ok": True, "jobId": job.jobId, "result": result}, status_code=202)
     except subprocess.TimeoutExpired:
         safe_log("job_failed", jobId=job.jobId, code="GENERATOR_TIMEOUT")
