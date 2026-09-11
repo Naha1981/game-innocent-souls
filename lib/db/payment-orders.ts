@@ -8,6 +8,8 @@ export async function createPaymentOrder(input: {
   packageId: NahaKidsPackage;
   amountCents: number;
   jobId?: string;
+  sourceObjectRef?: string;
+  generationRequestJson?: string;
 }) {
   const db = getDb();
   if (!db) throw new Error('DATABASE_NOT_CONFIGURED');
@@ -17,6 +19,8 @@ export async function createPaymentOrder(input: {
     amountCents: input.amountCents,
     status: 'pending',
     jobId: input.jobId ?? null,
+    sourceObjectRef: input.sourceObjectRef ?? null,
+    generationRequestJson: input.generationRequestJson ?? null,
   });
 }
 
