@@ -1,8 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { getDb } from './index';
 import { gameRecords } from './schema';
-import type { RuntimeManifest } from '../game-factory/types';
-import type { CharacterGenerationRequest } from '../game-factory/types';
+import type { RuntimeManifest, CharacterGenerationRequest } from '../game-factory/types';
 
 export async function upsertGameRecord(input: {
   jobId: string;
@@ -11,6 +10,7 @@ export async function upsertGameRecord(input: {
   atlasData: string;
   atlasMimeType: string;
   manifest: RuntimeManifest;
+  status?: 'draft' | 'paid';
 }) {
   const db = getDb();
   if (!db) throw new Error('DATABASE_NOT_CONFIGURED');
@@ -21,7 +21,8 @@ export async function upsertGameRecord(input: {
     atlasData: input.atlasData,
     atlasMimeType: input.atlasMimeType,
     manifestJson: JSON.stringify(input.manifest),
-    status: 'draft',
+    status: input.status ?? 'draft',
+    paidAt: input.status === 'paid' ? new Date() : null,
   }).onConflictDoUpdate({
     target: gameRecords.jobId,
     set: {
@@ -30,6 +31,7 @@ export async function upsertGameRecord(input: {
       atlasData: input.atlasData,
       atlasMimeType: input.atlasMimeType,
       manifestJson: JSON.stringify(input.manifest),
+      ...(input.status === 'paid' ? { status: 'paid', paidAt: new Date() } : {}),
     },
   });
 }
