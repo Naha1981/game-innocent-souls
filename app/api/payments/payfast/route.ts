@@ -16,41 +16,25 @@ export async function POST(request: Request) {
   const merchantId = process.env.PAYFAST_MERCHANT_ID?.trim();
   const merchantKey = process.env.PAYFAST_MERCHANT_KEY?.trim();
   const passphrase = process.env.PAYFAST_PASSPHRASE?.trim();
-
-  if (!merchantId || !merchantKey || !passphrase) {
-    return NextResponse.json({ ok: false, code: 'PAYFAST_NOT_CONFIGURED' }, { status: 503 });
-  }
-  if (!process.env.DATABASE_URL?.trim()) {
-    return NextResponse.json({ ok: false, code: 'DATABASE_NOT_CONFIGURED' }, { status: 503 });
-  }
+  if (!merchantId || !merchantKey || !passphrase) return NextResponse.json({ ok: false, code: 'PAYFAST_NOT_CONFIGURED' }, { status: 503 });
+  if (!process.env.DATABASE_URL?.trim()) return NextResponse.json({ ok: false, code: 'DATABASE_NOT_CONFIGURED' }, { status: 503 });
 
   try {
     const body = await request.json() as { package?: unknown; paymentId?: unknown; jobId?: unknown };
-    if (!isNahaKidsPackage(body.package)) {
-      return NextResponse.json({ ok: false, code: 'INVALID_PACKAGE' }, { status: 400 });
-    }
-    if (body.jobId !== undefined && !isUuid(body.jobId)) {
-      return NextResponse.json({ ok: false, code: 'INVALID_JOB_ID' }, { status: 400 });
-    }
-
-    const paymentId = typeof body.paymentId === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(body.paymentId)
-      ? body.paymentId
-      : randomUUID();
+    if (!isNahaKidsPackage(body.package)) return NextResponse.json({ ok: false, code: 'INVALID_PACKAGE' }, { status: 400 });
+    if (body.jobId !== undefined && !isUuid(body.jobId)) return NextResponse.json({ ok: false, code: 'INVALID_JOB_ID' }, { status: 400 });
+    const paymentId = typeof body.paymentId === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(body.paymentId) ? body.paymentId : randomUUID();
     const product = NAHAKIDS_PACKAGES[body.package];
-    await createPaymentOrder({
-      paymentId,
-      packageId: body.package,
-      amountCents: paymentAmountCents(product.amount),
-      jobId: typeof body.jobId === 'string' ? body.jobId : undefined,
-    });
+    await createPaymentOrder({ paymentId, packageId: body.package, amountCents: paymentAmountCents(product.amount), jobId: typeof body.jobId === 'string' ? body.jobId : undefined });
 
     const baseUrl = publicBaseUrl(request);
     const testing = process.env.PAYFAST_SANDBOX === 'true';
+    const returnPath = typeof body.jobId === 'string' ? `/g/${body.jobId}` : '/';
     const fields = {
       merchant_id: merchantId,
       merchant_key: merchantKey,
-      return_url: `${baseUrl}/?payment=success&m_payment_id=${paymentId}`,
-      cancel_url: `${baseUrl}/?payment=cancelled&m_payment_id=${paymentId}`,
+      return_url: `${baseUrl}${returnPath}?payment=success&m_payment_id=${paymentId}`,
+      cancel_url: `${baseUrl}${returnPath}?payment=cancelled&m_payment_id=${paymentId}`,
       notify_url: `${baseUrl}/api/payments/payfast/itn`,
       m_payment_id: paymentId,
       amount: product.amount.toFixed(2),
@@ -59,20 +43,10 @@ export async function POST(request: Request) {
       custom_str1: body.package,
       custom_str2: typeof body.jobId === 'string' ? body.jobId : '',
     };
-
     const checkout = buildPayfastCheckout(fields, passphrase);
-    return NextResponse.json({
-      ok: true,
-      paymentId,
-      package: body.package,
-      amount: fields.amount,
-      action: testing ? 'https://sandbox.payfast.co.za/eng/process' : 'https://www.payfast.co.za/eng/process',
-      fields: checkout,
-    });
+    return NextResponse.json({ ok: true, paymentId, package: body.package, amount: fields.amount, action: testing ? 'https://sandbox.payfast.co.za/eng/process' : 'https://www.payfast.co.za/eng/process', fields: checkout });
   } catch (error) {
-    if (error instanceof Error && error.message === 'DATABASE_NOT_CONFIGURED') {
-      return NextResponse.json({ ok: false, code: 'DATABASE_NOT_CONFIGURED' }, { status: 503 });
-    }
+    if (error instanceof Error && error.message === 'DATABASE_NOT_CONFIGURED') return NextResponse.json({ ok: false, code: 'DATABASE_NOT_CONFIGURED' }, { status: 503 });
     return NextResponse.json({ ok: false, code: 'PAYMENT_ORDER_FAILED' }, { status: 500 });
   }
 }
