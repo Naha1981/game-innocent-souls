@@ -4,12 +4,15 @@ import { isUuid } from '../../../../lib/payments/order';
 
 export const runtime = 'nodejs';
 
-export async function GET(request: Request, { params }: { params: { jobId: string } }) {
-  if (!isUuid(params.jobId)) return NextResponse.json({ ok: false, code: 'INVALID_JOB_ID' }, { status: 400 });
+type RouteContext = { params: Promise<{ jobId: string }> };
+
+export async function GET(request: Request, { params }: RouteContext) {
+  const { jobId } = await params;
+  if (!isUuid(jobId)) return NextResponse.json({ ok: false, code: 'INVALID_JOB_ID' }, { status: 400 });
   if (!process.env.DATABASE_URL?.trim()) return NextResponse.json({ ok: false, code: 'DATABASE_NOT_CONFIGURED' }, { status: 503 });
 
   try {
-    const record = await getGameRecord(params.jobId);
+    const record = await getGameRecord(jobId);
     if (!record) return NextResponse.json({ ok: false, code: 'GAME_NOT_FOUND' }, { status: 404 });
     if (record.status !== 'paid') return NextResponse.json({ ok: false, code: 'GAME_NOT_PAID' }, { status: 403 });
 
@@ -32,17 +35,18 @@ export async function GET(request: Request, { params }: { params: { jobId: strin
   }
 }
 
-export async function DELETE(request: Request, { params }: { params: { jobId: string } }) {
+export async function DELETE(request: Request, { params }: RouteContext) {
+  const { jobId } = await params;
   const secret = process.env.GAME_ADMIN_DELETE_SECRET?.trim();
   if (!secret) return NextResponse.json({ ok: false, code: 'DELETE_NOT_CONFIGURED' }, { status: 503 });
-  if (!isUuid(params.jobId)) return NextResponse.json({ ok: false, code: 'INVALID_JOB_ID' }, { status: 400 });
+  if (!isUuid(jobId)) return NextResponse.json({ ok: false, code: 'INVALID_JOB_ID' }, { status: 400 });
   if (request.headers.get('x-admin-delete-secret') !== secret) return NextResponse.json({ ok: false, code: 'UNAUTHORIZED' }, { status: 401 });
   if (!process.env.DATABASE_URL?.trim()) return NextResponse.json({ ok: false, code: 'DATABASE_NOT_CONFIGURED' }, { status: 503 });
 
   try {
-    const existing = await getGameRecord(params.jobId);
+    const existing = await getGameRecord(jobId);
     if (!existing) return NextResponse.json({ ok: false, code: 'GAME_NOT_FOUND' }, { status: 404 });
-    await deleteGameRecord(params.jobId);
+    await deleteGameRecord(jobId);
     return new NextResponse(null, { status: 204 });
   } catch {
     return NextResponse.json({ ok: false, code: 'GAME_DELETE_FAILED' }, { status: 500 });
