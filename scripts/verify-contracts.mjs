@@ -100,6 +100,10 @@ const worker = fs.readFileSync(path.join(root, 'worker/main.py'), 'utf8');
 if (!worker.includes('if not expected or not secret:')) throw new Error('Sprite worker authorization must fail closed when the shared secret is missing.');
 if (!worker.includes('hmac.compare_digest(secret, expected)')) throw new Error('Sprite worker authorization must use constant-time secret comparison.');
 if (!worker.includes('purge_expired_sources()')) throw new Error('Sprite worker must purge expired temporary child photos.');
+if (!worker.includes('active_sources: set[str] = set()')) throw new Error('Worker must track active source-photo references during generation.');
+if (!worker.includes('if token in active_sources:')) throw new Error('Worker cleanup must not delete a source while its generation job is active.');
+if (!worker.includes('active_sources.add(source_token)')) throw new Error('Worker must mark a source active before generation starts.');
+if (!worker.includes('active_sources.discard(source_token)')) throw new Error('Worker must release active source state after generation finishes.');
 if (!worker.includes('base_source.unlink(missing_ok=True)')) throw new Error('Sprite worker must delete the consumed temporary source after generation.');
 if (!worker.includes('SPRITE_GEN_TIMEOUT_SECONDS", "240"')) throw new Error('Sprite worker default stage timeout must stay below the Vercel Hobby function ceiling.');
 
