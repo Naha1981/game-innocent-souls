@@ -1,13 +1,16 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { use, useEffect, useMemo, useState } from 'react';
 import { getThemeGameplay } from '../../../lib/game-factory/theme-gameplay';
 import { collectiblePosition, isCollectibleHit, nextPlayerPosition } from '../../../lib/game-factory/gameplay';
 import type { RuntimeManifest } from '../../../lib/game-factory/types';
 
 type Game = { jobId: string; childName: string; adventure: 'football' | 'hero' | 'racer' | 'space'; atlas: { mimeType: string; data: string }; manifest: RuntimeManifest; paidAt?: string };
 
-export default function SharedGame({ params }: { params: { jobId: string } }) {
+type SharedGameProps = { params: Promise<{ jobId: string }> };
+
+export default function SharedGame({ params }: SharedGameProps) {
+  const { jobId } = use(params);
   const [game, setGame] = useState<Game | null>(null);
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState(false);
@@ -28,7 +31,7 @@ export default function SharedGame({ params }: { params: { jobId: string } }) {
   const shareUrl = typeof window === 'undefined' ? '' : window.location.href;
 
   async function loadGame() {
-    const response = await fetch(`/api/games/${encodeURIComponent(params.jobId)}`, { cache: 'no-store' });
+    const response = await fetch(`/api/games/${encodeURIComponent(jobId)}`, { cache: 'no-store' });
     if (response.ok) {
       const result = await response.json();
       if (result.ok) { setGame(result.game); setLoading(false); setPending(false); return true; }
@@ -49,7 +52,7 @@ export default function SharedGame({ params }: { params: { jobId: string } }) {
       }
     })();
     return () => { alive = false; };
-  }, [params.jobId]);
+  }, [jobId]);
 
   useEffect(() => {
     if (!game || !rects.length) return;
