@@ -20,6 +20,7 @@ const requiredFiles = [
   'lib/payfast.ts',
   'worker/main.py',
   'drizzle/0003_payment_generation_request.sql',
+  'drizzle/0004_generation_status.sql',
   '.env.example',
 ];
 
@@ -37,7 +38,13 @@ for (const invariant of [
   'eq(paymentOrders.packageId, input.packageId)',
   'eq(paymentOrders.amountCents, input.amountCents)',
   "ne(paymentOrders.status, 'paid')",
+  "eq(paymentOrders.generationStatus, 'pending')",
+  "set({ generationStatus: 'running' })",
+  "set({ generationStatus: 'complete' })",
 ]) if (!paymentOrders.includes(invariant)) throw new Error(`Payment-order update is missing invariant: ${invariant}`);
+
+const schema = fs.readFileSync(path.join(root, 'lib/db/schema.ts'), 'utf8');
+if (!schema.includes("generationStatus: text('generation_status').notNull().default('pending')")) throw new Error('Payment orders must persist a single-flight generation status.');
 
 const checkoutRoute = fs.readFileSync(path.join(root, 'app/api/payments/payfast/route.ts'), 'utf8');
 if (!checkoutRoute.includes('const paymentId = randomUUID();')) throw new Error('Payment identifiers must be generated server-side.');
@@ -61,6 +68,8 @@ if (!generationRoute.includes('paymentId')) throw new Error('Sprite generation m
 if (!generationRoute.includes("order.status !== 'paid'")) throw new Error('Sprite generation must refuse unpaid orders.');
 if (!generationRoute.includes('order.sourceObjectRef') || !generationRoute.includes('order.generationRequestJson')) throw new Error('Sprite generation must consume server-bound order metadata, not client-submitted generation data.');
 if (!generationRoute.includes("status: 'paid'")) throw new Error('Generated paid games must persist as paid entitlements.');
+for (const invariant of ['claimGeneration(body.paymentId)', 'order.generationStatus === \'complete\'', 'order.generationStatus === \'running\'', 'markGenerationComplete(body.paymentId)', 'releaseGenerationClaim(body.paymentId)']) if (!generationRoute.includes(invariant)) throw new Error(`Generation route missing single-flight invariant: ${invariant}`);
+
 const sourceRoute = fs.readFileSync(path.join(root, 'app/api/generation/source/route.ts'), 'utf8');
 for (const [name, route] of [['generation', generationRoute], ['source-photo', sourceRoute]]) {
   if (!route.includes('SPRITE_GEN_SHARED_SECRET?.trim()') || !route.includes('!secret')) throw new Error(`${name} route must fail closed when the sprite worker shared secret is missing.`);
@@ -71,20 +80,20 @@ const page = fs.readFileSync(path.join(root, 'app/page.tsx'), 'utf8');
 if (!page.includes('CREATE & PAY R499')) throw new Error('Hero checkout UI must advertise the configured R499 Hero package.');
 if (page.includes('R999')) throw new Error('Stale R999 Hero pricing copy detected.');
 if (!page.includes('generatePaidGame')) throw new Error('Client must trigger generation only after payment verification.');
-if (!page.includes('paymentState === \'pending\'')) throw new Error('Client must show verified-payment progress.');
+if (!page.includes('generationRequest: request')) throw new Error('Client checkout must bind the generation request to the paid order.');
+if (!page.includes('sourceObjectRef: securedSourceRef')) throw new Error('Client checkout must bind the secured source reference to the paid order.');
 
 const gameRoute = fs.readFileSync(path.join(root, 'app/api/games/[jobId]/route.ts'), 'utf8');
 if (!gameRoute.includes('GAME_ADMIN_DELETE_SECRET?.trim()')) throw new Error('Game asset deletion must require an operator secret.');
-if (!gameRoute.includes("x-admin-delete-secret")) throw new Error('Game asset deletion must use a dedicated server-side operator header.');
+if (!gameRoute.includes('x-admin-delete-secret')) throw new Error('Game asset deletion must use a dedicated server-side operator header.');
 
 const envExample = fs.readFileSync(path.join(root, '.env.example'), 'utf8');
 for (const variable of ['SPRITE_GEN_SHARED_SECRET=', 'GAME_ADMIN_DELETE_SECRET=']) if (!envExample.includes(variable)) throw new Error(`.env.example missing ${variable}`);
 
-const schema = fs.readFileSync(path.join(root, 'lib/db/schema.ts'), 'utf8');
-for (const column of ['sourceObjectRef', 'generationRequestJson']) if (!schema.includes(column)) throw new Error(`Payment schema missing ${column}.`);
-
-const migration = fs.readFileSync(path.join(root, 'drizzle/0003_payment_generation_request.sql'), 'utf8');
-for (const column of ['source_object_ref', 'generation_request_json']) if (!migration.includes(column)) throw new Error(`Payment migration missing ${column}.`);
+for (const [file, columns] of [['drizzle/0003_payment_generation_request.sql', ['source_object_ref', 'generation_request_json']], ['drizzle/0004_generation_status.sql', ['generation_status']]]) {
+  const migration = fs.readFileSync(path.join(root, file), 'utf8');
+  for (const column of columns) if (!migration.includes(column)) throw new Error(`Migration ${file} missing ${column}.`);
+}
 
 const worker = fs.readFileSync(path.join(root, 'worker/main.py'), 'utf8');
 if (!worker.includes('if not expected or not secret:')) throw new Error('Sprite worker authorization must fail closed when the shared secret is missing.');
@@ -101,4 +110,4 @@ if (packageJson.dependencies?.next !== '14.2.35') throw new Error(`Unexpected Ne
 for (const script of ['build', 'test:contracts', 'test:gameplay', 'test:generation', 'test:smoke']) if (!packageJson.scripts?.[script]) throw new Error(`Missing required npm script: ${script}`);
 
 console.log('NahaKids production contract checks: PASS');
-console.log(`Verified ${requiredFiles.length} required production files plus payment, paid-generation, privacy, deletion and deployment invariants.`);
+console.log(`Verified ${requiredFiles.length} required production files plus payment, paid-generation, single-flight, privacy, deletion and deployment invariants.`);
