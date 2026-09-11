@@ -1,0 +1,5 @@
+# Council of High Intelligence project override.
+# Decision-heavy work in this repo should use the product triad first.
+profile: classic
+triad: product
+chairman: gpt-5.4
