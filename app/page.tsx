@@ -14,8 +14,8 @@ const themes: Theme[] = [
   { id: 'space', name: 'Space Explorer', line: 'Reach the stars.', icon: '🚀' },
 ];
 
-const PHOTO_TTL_MS = 15 * 60 * 1000;
-type GenerationState = 'idle' | 'uploading' | 'generating' | 'succeeded' | 'error';
+const PHOTO_TTL_MS = 30 * 60 * 1000;
+type GenerationState = 'idle' | 'uploading' | 'awaiting_payment' | 'generating' | 'succeeded' | 'error';
 type PaymentState = 'idle' | 'starting' | 'pending' | 'paid' | 'error';
 type GeneratedAsset = { atlasDataUrl: string; manifest: RuntimeManifest };
 
@@ -113,89 +113,152 @@ export default function Home() {
     track('photo_selected', { adventure: theme });
   }
 
-  async function createGame() {
-    if (!photoFile || !photoMeta || !consent || !name.trim() || generationState === 'uploading' || generationState === 'generating') return;
-    const request: CharacterGenerationRequest = {
-      jobId: crypto.randomUUID(), childName: name.trim(), adventure: theme,
-      sourcePhoto: { kind: 'browser-temporary', ...photoMeta },
-      consent: { confirmed: true, actor: 'authorised-educator', confirmedAt: new Date().toISOString() },
-      safety: { biometricIdentification: false, identityMatching: false, stylisedAssetOnly: true },
-    };
-    setJobId(request.jobId); setCreated(true); resetGame(); setGenerationError(null); clearGeneratedAsset();
-    setGenerationState('uploading'); generationStartedAtRef.current = Date.now();
-    track('generation_started', { jobId: request.jobId, adventure: theme });
+  async function startPayment(request: CharacterGenerationRequest, securedSourceRef: string) {
+    if (paymentState === 'starting' || paymentState === 'pending' || paymentState === 'paid') return;
+    setPaymentState('starting');
+    setPaymentError(null);
     try {
-      const form = new FormData(); form.append('file', photoFile, photoFile.name || 'child-photo');
-      const sourceResponse = await fetch('/api/generation/source', { method: 'POST', body: form, cache: 'no-store' });
-      const sourceResult = await sourceResponse.json();
-      if (!sourceResponse.ok || !sourceResult.sourceObjectRef) throw new Error(sourceResult.message || sourceResult.code || 'Temporary photo upload failed.');
-      setSourceObjectRef(sourceResult.sourceObjectRef); setGenerationState('generating');
+      const response = await fetch('/api/payments/payfast', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ package: 'hero', jobId: request.jobId, sourceObjectRef: securedSourceRef, generationRequest: request }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.code || 'Could not start secure checkout.');
+      setPaymentId(result.paymentId);
+      setPaymentState('pending');
+      const form = document.createElement('form');
+      form.method = 'POST';
+      form.action = result.action;
+      form.style.display = 'none';
+      for (const [key, value] of Object.entries(result.fields as Record<string, string>)) {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = key;
+        input.value = value;
+        form.appendChild(input);
+      }
+      document.body.appendChild(form);
+      form.submit();
+    } catch (error) {
+      setPaymentState('error');
+      setPaymentError(error instanceof Error ? error.message : 'Could not start secure checkout.');
+      setGenerationState('error');
+    }
+  }
+
+  async function generatePaidGame(verifiedPaymentId: string) {
+    setGenerationState('generating');
+    setGenerationError(null);
+    generationStartedAtRef.current = Date.now();
+    track('generation_started', { jobId: jobId ?? undefined, adventure: theme });
+    try {
       const generationResponse = await fetch('/api/generation', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ ...request, sourceObjectRef: sourceResult.sourceObjectRef }), cache: 'no-store',
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ paymentId: verifiedPaymentId }),
+        cache: 'no-store',
       });
       const generationResult = await generationResponse.json();
-      if (!generationResponse.ok || !generationResult.ok) throw new Error(generationResult.message || generationResult.code || 'Character generation failed.');
-      const result = generationResult.result; const atlas = result?.atlas; const manifest = result?.manifest as RuntimeManifest | undefined;
+      if (!generationResponse.ok || !generationResult.ok) throw new Error(generationResult.message || generationResult.code || 'Paid generation could not be completed.');
+      const result = generationResult.result;
+      const atlas = result?.result?.atlas;
+      const manifest = result?.result?.manifest as RuntimeManifest | undefined;
       if (!atlas?.data || atlas.encoding !== 'base64' || !manifest?.frame_layout?.rows) throw new Error('Generator succeeded but returned no playable atlas.');
+      if (generationResult.game?.childName) setName(generationResult.game.childName);
+      if (generationResult.game?.adventure) setTheme(generationResult.game.adventure);
+      setJobId(generationResult.jobId ?? jobId);
+      setCreated(true);
       setGeneratedAsset({ atlasDataUrl: `data:${atlas.mimeType || 'image/png'};base64,${atlas.data}`, manifest });
-      setAnimationState('idle'); setFrameIndex(0); setGenerationState('succeeded');
-      track('generation_succeeded', { jobId: request.jobId, adventure: theme, durationMs: generationStartedAtRef.current ? Date.now() - generationStartedAtRef.current : undefined });
+      setAnimationState('idle');
+      setFrameIndex(0);
+      setGenerationState('succeeded');
+      setPaymentState('paid');
+      track('generation_succeeded', { jobId: generationResult.jobId ?? jobId ?? undefined, adventure: generationResult.game?.adventure ?? theme, durationMs: generationStartedAtRef.current ? Date.now() - generationStartedAtRef.current : undefined });
       generationStartedAtRef.current = null;
     } catch (error) {
-      const reason = error instanceof Error ? error.message : 'Generation could not be completed.';
-      setGenerationState('error'); setGenerationError(reason);
-      track('generation_failed', { jobId: request.jobId, adventure: theme, durationMs: generationStartedAtRef.current ? Date.now() - generationStartedAtRef.current : undefined, reason });
+      const reason = error instanceof Error ? error.message : 'Paid generation could not be completed.';
+      setGenerationState('error');
+      setGenerationError(reason);
+      track('generation_failed', { jobId: jobId ?? undefined, adventure: theme, durationMs: generationStartedAtRef.current ? Date.now() - generationStartedAtRef.current : undefined, reason });
       generationStartedAtRef.current = null;
     }
   }
 
-  async function startPayment() {
-    if (!jobId || !generatedAsset || paymentState === 'starting' || paymentState === 'paid') return;
-    setPaymentState('starting'); setPaymentError(null);
+  async function createGame() {
+    if (!photoFile || !photoMeta || !consent || !name.trim() || generationState === 'uploading' || generationState === 'generating') return;
+    const request: CharacterGenerationRequest = {
+      jobId: crypto.randomUUID(),
+      childName: name.trim(),
+      adventure: theme,
+      sourcePhoto: { kind: 'browser-temporary', ...photoMeta },
+      consent: { confirmed: true, actor: 'authorised-educator', confirmedAt: new Date().toISOString() },
+      safety: { biometricIdentification: false, identityMatching: false, stylisedAssetOnly: true },
+    };
+    setJobId(request.jobId);
+    setCreated(true);
+    resetGame();
+    setGenerationError(null);
+    clearGeneratedAsset();
+    setGenerationState('uploading');
     try {
-      const response = await fetch('/api/payments/payfast', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ package: 'hero', jobId }),
-      });
-      const result = await response.json();
-      if (!response.ok || !result.ok) throw new Error(result.code || 'Could not start secure checkout.');
-      setPaymentId(result.paymentId); setPaymentState('pending');
-      const form = document.createElement('form'); form.method = 'POST'; form.action = result.action; form.style.display = 'none';
-      for (const [key, value] of Object.entries(result.fields as Record<string, string>)) {
-        const input = document.createElement('input'); input.type = 'hidden'; input.name = key; input.value = value; form.appendChild(input);
-      }
-      document.body.appendChild(form); form.submit();
+      const form = new FormData();
+      form.append('file', photoFile, photoFile.name || 'child-photo');
+      const sourceResponse = await fetch('/api/generation/source', { method: 'POST', body: form, cache: 'no-store' });
+      const sourceResult = await sourceResponse.json();
+      if (!sourceResponse.ok || !sourceResult.sourceObjectRef) throw new Error(sourceResult.message || sourceResult.code || 'Temporary photo upload failed.');
+      setSourceObjectRef(sourceResult.sourceObjectRef);
+      setGenerationState('awaiting_payment');
+      await startPayment(request, sourceResult.sourceObjectRef);
     } catch (error) {
-      setPaymentState('error'); setPaymentError(error instanceof Error ? error.message : 'Could not start secure checkout.');
+      const reason = error instanceof Error ? error.message : 'Could not prepare the secure checkout.';
+      setGenerationState('error');
+      setGenerationError(reason);
+      setPaymentState('error');
+      setPaymentError(reason);
     }
   }
 
   function play() {
     if (!generatedAsset) return;
-    resetGame(); setTimeLeft(gameSpec.timeLimitSeconds ?? 30); setPlaying(true); gameStartedAtRef.current = Date.now();
+    resetGame();
+    setTimeLeft(gameSpec.timeLimitSeconds ?? 30);
+    setPlaying(true);
+    gameStartedAtRef.current = Date.now();
     track('game_started', { jobId: jobId ?? undefined, adventure: theme });
   }
+
   function finishWin() {
-    setGameWon(true); setPlaying(false); setAnimationState('celebrate');
+    setGameWon(true);
+    setPlaying(false);
+    setAnimationState('celebrate');
     track('game_won', { jobId: jobId ?? undefined, adventure: theme, durationMs: gameStartedAtRef.current ? Date.now() - gameStartedAtRef.current : undefined });
     gameStartedAtRef.current = null;
   }
+
   function move(direction: -1 | 1) {
     if (!playing || gameWon || gameLost || !generatedAsset) return;
-    const nextPosition = nextPlayerPosition(position, direction); setPosition(nextPosition); setAnimationState('walk');
+    const nextPosition = nextPlayerPosition(position, direction);
+    setPosition(nextPosition);
+    setAnimationState('walk');
     if (isCollectibleHit(nextPosition, starsCollected)) {
-      const nextStars = starsCollected + 1; setStarsCollected(nextStars); setAnimationState('idle');
+      const nextStars = starsCollected + 1;
+      setStarsCollected(nextStars);
+      setAnimationState('idle');
       if (hasWon(nextStars, nextPosition)) finishWin();
     } else if (starsCollected >= gameSpec.goalCount && hasWon(starsCollected, nextPosition)) finishWin();
   }
+
   function jump() {
     if (!playing || gameWon || gameLost || !generatedAsset) return;
-    setAnimationState('jump'); window.setTimeout(() => setAnimationState(current => current === 'jump' ? 'idle' : current), 650);
+    setAnimationState('jump');
+    window.setTimeout(() => setAnimationState(current => current === 'jump' ? 'idle' : current), 650);
   }
+
   function actionFeedback() {
     if (!playing || gameWon || gameLost || !generatedAsset) return;
-    setAnimationState('celebrate'); window.setTimeout(() => setAnimationState(current => current === 'celebrate' ? 'idle' : current), 900);
+    setAnimationState('celebrate');
+    window.setTimeout(() => setAnimationState(current => current === 'celebrate' ? 'idle' : current), 900);
   }
 
   useEffect(() => {
@@ -205,16 +268,27 @@ export default function Home() {
       if (e.key === ' ' || e.key.toLowerCase() === 'w') jump();
       if (e.key.toLowerCase() === 'c') actionFeedback();
     }
-    window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   });
+
   useEffect(() => {
     if (!playing || !racerMode || gameWon || gameLost) return;
     const timer = window.setInterval(() => setTimeLeft(current => {
-      if (current <= 1) { window.clearInterval(timer); setGameLost(true); setPlaying(false); setAnimationState('idle'); track('game_lost', { jobId: jobId ?? undefined, adventure: theme, durationMs: gameStartedAtRef.current ? Date.now() - gameStartedAtRef.current : undefined, reason: 'timer_expired' }); gameStartedAtRef.current = null; return 0; }
+      if (current <= 1) {
+        window.clearInterval(timer);
+        setGameLost(true);
+        setPlaying(false);
+        setAnimationState('idle');
+        track('game_lost', { jobId: jobId ?? undefined, adventure: theme, durationMs: gameStartedAtRef.current ? Date.now() - gameStartedAtRef.current : undefined, reason: 'timer_expired' });
+        gameStartedAtRef.current = null;
+        return 0;
+      }
       return current - 1;
     }), 1000);
     return () => window.clearInterval(timer);
   }, [playing, racerMode, gameWon, gameLost, jobId, theme]);
+
   useEffect(() => {
     if (!generatedAsset || !activeRects.length) return;
     const durations = generatedAsset.manifest.animation?.rows?.[animationState]?.durations_ms ?? [];
@@ -222,38 +296,76 @@ export default function Home() {
     const timer = window.setTimeout(() => setFrameIndex(i => (i + 1) % activeRects.length), Math.max(50, duration));
     return () => window.clearTimeout(timer);
   }, [generatedAsset, animationState, activeRects.length, frameIndex]);
+
   useEffect(() => {
     if (!photoMeta) return;
     const remaining = Math.max(0, new Date(photoMeta.expiresAt).getTime() - Date.now());
     const timer = window.setTimeout(() => {
-      if (!photoDeletedRef.current) { track('photo_deleted', { jobId: jobId ?? undefined, adventure: theme, reason: 'ttl_expired' }); photoDeletedRef.current = true; }
-      setPhoto(null); setPhotoFile(null); setPhotoMeta(null); setCreated(false); resetGame(); setConsent(false); setJobId(null); setSourceObjectRef(null); setGenerationState('idle'); setGenerationError(null); clearGeneratedAsset();
+      if (!photoDeletedRef.current) {
+        track('photo_deleted', { jobId: jobId ?? undefined, adventure: theme, reason: 'ttl_expired' });
+        photoDeletedRef.current = true;
+      }
+      setPhoto(null);
+      setPhotoFile(null);
+      setPhotoMeta(null);
+      setCreated(false);
+      resetGame();
+      setConsent(false);
+      setJobId(null);
+      setSourceObjectRef(null);
+      setGenerationState('idle');
+      setGenerationError(null);
+      clearGeneratedAsset();
     }, remaining);
     return () => window.clearTimeout(timer);
   }, [photoMeta, jobId, theme]);
+
   useEffect(() => {
     const returnedPaymentId = new URLSearchParams(window.location.search).get('m_payment_id');
     if (!returnedPaymentId) return;
-    setPaymentId(returnedPaymentId); setPaymentState('pending');
+    setPaymentId(returnedPaymentId);
+    setPaymentState('pending');
+    setGenerationState('awaiting_payment');
     let attempts = 0;
+    let generating = false;
     const poll = window.setInterval(async () => {
       attempts += 1;
       try {
         const response = await fetch(`/api/payments/payfast/status?m_payment_id=${encodeURIComponent(returnedPaymentId)}`, { cache: 'no-store' });
         const result = await response.json();
-        if (response.ok && result.status === 'paid') { setPaymentState('paid'); window.clearInterval(poll); }
+        if (response.ok && result.status === 'paid') {
+          setPaymentState('paid');
+          window.clearInterval(poll);
+          if (!generating) {
+            generating = true;
+            await generatePaidGame(returnedPaymentId);
+          }
+        }
       } catch {}
-      if (attempts >= 20) { window.clearInterval(poll); }
+      if (attempts >= 20) window.clearInterval(poll);
     }, 3000);
     return () => window.clearInterval(poll);
   }, []);
 
   function deletePhoto() {
-    if (!photoDeletedRef.current) { track('photo_deleted', { jobId: jobId ?? undefined, adventure: theme, reason: 'user_deleted' }); photoDeletedRef.current = true; }
-    setPhoto(null); setPhotoFile(null); setPhotoMeta(null); setCreated(false); resetGame(); setConsent(false); setJobId(null); setSourceObjectRef(null); setGenerationState('idle'); setGenerationError(null); clearGeneratedAsset();
+    if (!photoDeletedRef.current) {
+      track('photo_deleted', { jobId: jobId ?? undefined, adventure: theme, reason: 'user_deleted' });
+      photoDeletedRef.current = true;
+    }
+    setPhoto(null);
+    setPhotoFile(null);
+    setPhotoMeta(null);
+    setCreated(false);
+    resetGame();
+    setConsent(false);
+    setJobId(null);
+    setSourceObjectRef(null);
+    setGenerationState('idle');
+    setGenerationError(null);
+    clearGeneratedAsset();
   }
 
-  const generationLabel = generationState === 'uploading' ? 'UPLOADING TEMPORARY PHOTO…' : generationState === 'generating' ? 'GENERATING CHARACTER…' : generationState === 'succeeded' ? 'REAL GENERATION COMPLETE' : generationState === 'error' ? 'REAL GENERATION NEEDS ATTENTION' : 'READY FOR GENERATOR';
+  const generationLabel = generationState === 'uploading' ? 'UPLOADING TEMPORARY PHOTO…' : generationState === 'awaiting_payment' ? 'AWAITING VERIFIED PAYMENT…' : generationState === 'generating' ? 'GENERATING PAID GAME…' : generationState === 'succeeded' ? 'REAL GENERATION COMPLETE' : generationState === 'error' ? 'REAL GENERATION NEEDS ATTENTION' : 'READY FOR PURCHASE';
   const spriteStyle = activeRect && generatedAsset ? { width: cellWidth, height: cellHeight, backgroundImage: `url(${generatedAsset.atlasDataUrl})`, backgroundRepeat: 'no-repeat', backgroundPosition: `-${activeRect.x}px -${activeRect.y}px`, backgroundSize: `${sheetWidth}px ${sheetHeight}px` } : undefined;
 
   return (
@@ -270,11 +382,12 @@ export default function Home() {
           <div className="section-kicker adventure-kicker">02 / ADVENTURE</div><h2>Choose an adventure</h2>
           <div className="themes">{themes.map(t => <button type="button" key={t.id} className={`theme ${theme === t.id ? 'active' : ''}`} onClick={() => { setTheme(t.id); resetGame(); }}><b>{t.icon} {t.name}</b><span className="muted">{t.line}</span></button>)}</div>
           <label className="consent"><input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)}/><span>I confirm I am authorised to provide this child&apos;s photo for this demo experience.</span></label>
-          <button className="cta" disabled={!photoFile || !name.trim() || !consent || generationState === 'uploading' || generationState === 'generating'} onClick={createGame}>{generationState === 'uploading' ? 'UPLOADING…' : generationState === 'generating' ? 'GENERATING…' : 'CREATE GAME'}</button>
+          <button className="cta" disabled={!photoFile || !name.trim() || !consent || generationState === 'uploading' || generationState === 'awaiting_payment' || generationState === 'generating'} onClick={createGame}>{generationState === 'uploading' ? 'UPLOADING…' : generationState === 'awaiting_payment' ? 'WAITING FOR PAYFAST…' : generationState === 'generating' ? 'GENERATING…' : 'CREATE & PAY R499'}</button>
           {generationError && <div className="muted" role="alert" style={{ marginTop: 10 }}>Real generator: {generationError}</div>}
+          {paymentError && <div className="muted" role="alert" style={{ marginTop: 8 }}>Payment: {paymentError}</div>}
         </div>
         <div className="card game">
-          <div><div className="section-kicker">03 / PLAYABLE GAME</div><h2>Play</h2><p className="muted">When generation succeeds, the game uses the real sprite-gen atlas and its manifest rectangles. No runtime frame-grid guessing.</p></div>
+          <div><div className="section-kicker">03 / PLAYABLE GAME</div><h2>Play</h2><p className="muted">Generation starts only after Payfast confirms the purchase. The playable game uses the real sprite-gen atlas and manifest rectangles.</p></div>
           <div className={`game-screen ${playing ? 'playing' : ''}`}>
             <div className="sun"/><div className="hill"/><div className="game-label">{created ? `${selected.icon} ${name} — ${selected.name}` : 'YOUR CHILD — ADVENTURE'}</div>
             {playing && !gameWon && <div className="collectible" style={{ left: `${currentCollectiblePosition}%` }}>{gameSpec.collectible}</div>}
@@ -283,7 +396,7 @@ export default function Home() {
             {playing && <div className="score">{racerMode ? `CHECKPOINTS ${starsCollected}/${gameSpec.goalCount}` : `${gameSpec.collectible} ${starsCollected}/${gameSpec.goalCount}`}</div>}
             {playing && racerMode && <div className="timer" aria-label={`Time remaining ${timeLeft} seconds`}><strong>{timeLeft}s</strong><span style={{ width: `${timerPercent}%` }} /></div>}
             {!created && <div className="screen-message">Create a hero to begin</div>}
-            {created && generationState !== 'succeeded' && <div className="screen-message">{generationState === 'error' ? 'Generation needs attention' : 'Your real hero is being created…'}</div>}
+            {created && generationState !== 'succeeded' && <div className="screen-message">{generationState === 'error' ? 'Generation needs attention' : generationState === 'awaiting_payment' ? 'Complete the secure Payfast checkout…' : 'Your paid hero is being created…'}</div>}
             {created && generationState === 'succeeded' && !playing && !gameWon && !gameLost && <button className="play-button" onClick={play}>▶ PLAY {name.toUpperCase()}</button>}
             {gameWon && <div className="win-message"><strong>🎉 YOU DID IT!</strong><span>{name} completed: {gameSpec.objective}</span><button onClick={play}>PLAY AGAIN</button></div>}
             {gameLost && <div className="win-message"><strong>⏱️ TIME&apos;S UP!</strong><span>{name} missed the finish. Try the {selected.name} again.</span><button onClick={play}>TRY AGAIN</button></div>}
@@ -291,15 +404,13 @@ export default function Home() {
           {created ? <div className="pipeline-card">
             <div className="pipeline-head"><strong>Generation pipeline</strong><span>{generationLabel}</span></div>
             <div className="pipeline-grid"><span>Adventure<strong>{selected.name}</strong></span><span>Objective<strong>{gameSpec.objective}</strong></span><span>Animations<strong>Idle · Walk · Jump · Celebrate</strong></span><span>Safety<strong>No biometric ID</strong></span><span>Source<strong>Temporary • deleted after generation</strong></span></div>
-            <div className="pipeline-id">Job {jobId?.slice(0, 8)}…{sourceObjectRef ? ' • source secured' : ''}{generatedAsset ? ' • atlas loaded' : ''}</div>
-            {generatedAsset && <div style={{ marginTop: 18, paddingTop: 18, borderTop: '1px solid #e5eadf' }}>
-              {paymentState === 'paid' ? <div><strong>✅ PAYMENT VERIFIED</strong><div className="muted">Payfast has confirmed this order. The paid entitlement is now attached to this game job.</div></div> : <div><strong>Save this personalised game</strong><div className="muted">The free demo lets you play. Pay R999 to attach the Hero package to this game job.</div><button className="cta" style={{ marginTop: 12 }} disabled={paymentState === 'starting' || paymentState === 'pending'} onClick={startPayment}>{paymentState === 'starting' ? 'STARTING PAYFAST…' : paymentState === 'pending' ? 'WAITING FOR VERIFIED PAYMENT…' : 'PAY R999 • HERO PACKAGE'}</button>{paymentError && <div className="muted" role="alert" style={{ marginTop: 8 }}>Payment: {paymentError}</div>}{paymentId && paymentState === 'pending' && <div className="muted" style={{ marginTop: 8 }}>Order {paymentId.slice(0, 8)}… is waiting for Payfast server confirmation.</div>}</div>}
-            </div>}
+            <div className="pipeline-id">Job {jobId?.slice(0, 8)}…{sourceObjectRef || generatedAsset ? ' • source secured' : ''}{generatedAsset ? ' • atlas loaded' : ''}</div>
+            {paymentState === 'paid' ? <div style={{ marginTop: 18, paddingTop: 18, borderTop: '1px solid #e5eadf' }}><strong>✅ PAYMENT VERIFIED</strong><div className="muted">Payfast has confirmed the Hero package. Generation is now tied to the paid entitlement.</div></div> : paymentState === 'pending' ? <div style={{ marginTop: 18, paddingTop: 18, borderTop: '1px solid #e5eadf' }}><strong>SECURE CHECKOUT IN PROGRESS</strong><div className="muted">Waiting for Payfast server confirmation before any paid generation work starts.</div>{paymentId && <div className="muted" style={{ marginTop: 8 }}>Order {paymentId.slice(0, 8)}…</div>}</div> : null}
           </div> : <div><div className="game-title">Your game appears here</div><div className="steps"><span className="step">PHOTO</span><span className="step">CHARACTER</span><span className="step">ANIMATION</span><span className="step">PLAY</span></div></div>}
           {playing && !gameWon && !gameLost && <div className="controls"><div className="game-title">{starsCollected >= gameSpec.goalCount ? gameSpec.actionHint : gameSpec.objective}</div><div className="control-row"><button onClick={() => move(-1)} aria-label="Move left">←</button><button onClick={() => move(1)} aria-label="Move right">→</button><button onClick={jump} disabled={!generatedAsset}>JUMP</button><button onClick={actionFeedback} disabled={!generatedAsset}>{gameSpec.actionLabel}</button><button className="stop" onClick={() => resetGame()}>STOP</button></div><div className="muted">Use ← → or A / D to move. Space / W jumps. C triggers {gameSpec.actionLabel.toLowerCase()} feedback. {gameSpec.actionHint}</div></div>}
         </div>
       </section>
-      <footer className="footer">NahaLabs • Creche demo • No facial recognition • Browser preview expires after 15 minutes. Production source retention is worker-controlled and deletion is enforced after generation.</footer>
+      <footer className="footer">NahaLabs • Creche demo • No facial recognition • Browser preview expires after 30 minutes. Production source retention is worker-controlled and deletion is enforced after generation.</footer>
     </main>
   );
 }
