@@ -70,7 +70,12 @@ export async function POST(request: Request) {
         amountCents,
         pfPaymentId: params.get('pf_payment_id') ?? undefined,
       });
-      if (!updated) return new NextResponse('Payment order update failed', { status: 500 });
+      if (!updated) {
+        const current = await getPaymentOrder(paymentId);
+        if (!current || current.status !== 'paid' || current.packageId !== packageId || current.amountCents !== amountCents) {
+          return new NextResponse('Payment order update failed', { status: 500 });
+        }
+      }
     }
     if (order.jobId) await markGamePaid(order.jobId);
 
