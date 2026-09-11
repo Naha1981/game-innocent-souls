@@ -22,9 +22,23 @@ The photo is processed locally in the browser in this prototype; it is not uploa
 
 Production pipeline:
 
-`Consent → temporary photo intake → character generation → sprite/animation atlas → reusable game template → web game → QR/share link → automatic photo deletion`
+`Consent → temporary photo intake → secure worker → character generation → sprite/animation atlas → reusable game template → web game → QR/share link → automatic photo deletion`
 
-`aldegad/sprite-gen` is the asset-generation foundation identified for this product. It is not copied into this application repository; its workflow will sit behind the character-generation service.
+`aldegad/sprite-gen` is the asset-generation foundation identified for this product. It is not copied into this application repository. Its canonical pipeline is `prepare → gen → extract → compose → QA`, producing transparent sprite frames and a runtime atlas/manifest.
+
+The application now contains an explicit adapter contract and API boundary for that worker. The API **does not report success unless a real worker is configured and responds successfully**.
+
+### Production worker contract
+
+Set:
+
+```text
+SPRITE_GEN_WORKER_URL=https://<secure-worker>/generate
+```
+
+The Next.js route `POST /api/generation` validates the safety contract and sends a metadata-only `sprite-gen` job to the worker. The child photo must be transferred through a separate secure temporary-object mechanism; it is never embedded in the job JSON.
+
+The worker will own Python/sprite-gen execution, provider credentials, temporary source-photo access, output validation, atlas publication and source deletion. The web application remains the product/orchestration layer.
 
 ## Run locally
 
@@ -43,3 +57,4 @@ Open http://localhost:3000.
 - The generated character should be a stylised game asset, not an identity system.
 - Production storage and retention rules must be explicit and auditable.
 - Never claim that an AI generation step happened when the prototype is using a placeholder.
+- Never place child photos inside JSON job manifests or logs.
