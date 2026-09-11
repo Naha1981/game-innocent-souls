@@ -49,8 +49,9 @@ export async function POST(request: Request) {
     const gross = params.get('amount_gross');
     if (params.get('merchant_id') !== merchantId || params.get('payment_status') !== 'COMPLETE' || !paymentId || !packageId || !gross || !(packageId in NAHAKIDS_PACKAGES)) return new NextResponse('Invalid transaction', { status: 400 });
 
-    const expected = NAHAKIDS_PACKAGES[packageId as keyof typeof NAHAKIDS_PACKAGES].amount.toFixed(2);
-    if (Number(gross).toFixed(2) !== expected) return new NextResponse('Amount mismatch', { status: 400 });
+    const expectedPackage = NAHAKIDS_PACKAGES[packageId as keyof typeof NAHAKIDS_PACKAGES];
+    const amountCents = Math.round(Number(gross) * 100);
+    if (Number(gross).toFixed(2) !== expectedPackage.amount.toFixed(2) || !Number.isInteger(amountCents)) return new NextResponse('Amount mismatch', { status: 400 });
 
     const sourceIp = requestIp(request);
     if (!sourceIp || !(await payfastIps()).has(sourceIp)) return new NextResponse('Invalid source', { status: 403 });
@@ -60,10 +61,15 @@ export async function POST(request: Request) {
     if (!validationResponse.ok || (await validationResponse.text()).trim() !== 'VALID') return new NextResponse('Payfast validation failed', { status: 400 });
 
     const order = await getPaymentOrder(paymentId);
-    if (!order || order.packageId !== packageId || order.amountCents !== Math.round(Number(gross) * 100)) return new NextResponse('Unknown payment order', { status: 404 });
+    if (!order || order.packageId !== packageId || order.amountCents !== amountCents) return new NextResponse('Unknown payment order', { status: 404 });
 
     if (order.status !== 'paid') {
-      const updated = await markPaymentPaid({ paymentId, pfPaymentId: params.get('pf_payment_id') ?? undefined });
+      const updated = await markPaymentPaid({
+        paymentId,
+        packageId: packageId as keyof typeof NAHAKIDS_PACKAGES,
+        amountCents,
+        pfPaymentId: params.get('pf_payment_id') ?? undefined,
+      });
       if (!updated) return new NextResponse('Payment order update failed', { status: 500 });
     }
     if (order.jobId) await markGamePaid(order.jobId);
