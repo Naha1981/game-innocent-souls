@@ -1,9 +1,10 @@
 'use client';
 
-import { ChangeEvent, useEffect, useMemo, useState } from 'react';
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
 import type { CharacterGenerationRequest, RuntimeManifest } from '../lib/game-factory/types';
 import { GAME_GOAL_STARS, FINISH_POSITION, PLAYER_START_POSITION, collectiblePosition, hasWon, isCollectibleHit, nextPlayerPosition } from '../lib/game-factory/gameplay';
 import { getThemeGameplay } from '../lib/game-factory/theme-gameplay';
+import type { GameTelemetryEvent } from '../lib/game-factory/telemetry';
 
 type Theme = { id: CharacterGenerationRequest['adventure']; name: string; line: string; icon: string };
 const themes: Theme[] = [
@@ -16,6 +17,8 @@ const themes: Theme[] = [
 const PHOTO_TTL_MS = 15 * 60 * 1000;
 type GenerationState = 'idle' | 'uploading' | 'generating' | 'succeeded' | 'error';
 type GeneratedAsset = { atlasDataUrl: string; manifest: RuntimeManifest };
+
+type TelemetryExtra = Omit<GameTelemetryEvent, 'event'>;
 
 export default function Home() {
   const [name, setName] = useState('');
@@ -39,6 +42,10 @@ export default function Home() {
   const [animationState, setAnimationState] = useState<'idle' | 'walk' | 'jump' | 'celebrate'>('idle');
   const [frameIndex, setFrameIndex] = useState(0);
 
+  const generationStartedAtRef = useRef<number | null>(null);
+  const gameStartedAtRef = useRef<number | null>(null);
+  const photoDeletedRef = useRef(false);
+
   const selected = useMemo(() => themes.find(t => t.id === theme)!, [theme]);
   const gameSpec = useMemo(() => getThemeGameplay(theme), [theme]);
   const activeRects = generatedAsset?.manifest.frame_layout?.rows?.[animationState] ?? [];
@@ -50,6 +57,18 @@ export default function Home() {
   const currentCollectiblePosition = collectiblePosition(starsCollected);
   const racerMode = theme === 'racer';
   const timerPercent = racerMode ? Math.max(0, Math.min(100, (timeLeft / (gameSpec.timeLimitSeconds ?? 30)) * 100)) : 100;
+
+  function track(event: GameTelemetryEvent['event'], extra: TelemetryExtra = {}) {
+    const payload: GameTelemetryEvent = { event, ...extra };
+    void fetch('/api/telemetry', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+      keepalive: true,
+    }).catch(() => {
+      // Telemetry must never block or break the game experience.
+    });
+  }
 
   function clearGeneratedAsset() {
     setGeneratedAsset(null);
@@ -66,6 +85,7 @@ export default function Home() {
     setTimeLeft(gameSpec.timeLimitSeconds ?? 30);
     setAnimationState('idle');
     setFrameIndex(0);
+    gameStartedAtRef.current = null;
   }
 
   function handlePhoto(e: ChangeEvent<HTMLInputElement>) {
@@ -85,6 +105,8 @@ export default function Home() {
     setGenerationState('idle');
     setGenerationError(null);
     clearGeneratedAsset();
+    photoDeletedRef.current = false;
+    track('photo_selected', { adventure: theme });
   }
 
   async function createGame() {
@@ -105,6 +127,8 @@ export default function Home() {
     setGenerationError(null);
     clearGeneratedAsset();
     setGenerationState('uploading');
+    generationStartedAtRef.current = Date.now();
+    track('generation_started', { jobId: request.jobId, adventure: theme });
 
     try {
       const form = new FormData();
@@ -139,9 +163,23 @@ export default function Home() {
       setAnimationState('idle');
       setFrameIndex(0);
       setGenerationState('succeeded');
+      track('generation_succeeded', {
+        jobId: request.jobId,
+        adventure: theme,
+        durationMs: generationStartedAtRef.current ? Date.now() - generationStartedAtRef.current : undefined,
+      });
+      generationStartedAtRef.current = null;
     } catch (error) {
+      const reason = error instanceof Error ? error.message : 'Generation could not be completed.';
       setGenerationState('error');
-      setGenerationError(error instanceof Error ? error.message : 'Generation could not be completed.');
+      setGenerationError(reason);
+      track('generation_failed', {
+        jobId: request.jobId,
+        adventure: theme,
+        durationMs: generationStartedAtRef.current ? Date.now() - generationStartedAtRef.current : undefined,
+        reason,
+      });
+      generationStartedAtRef.current = null;
     }
   }
 
@@ -150,12 +188,20 @@ export default function Home() {
     resetGame();
     setTimeLeft(gameSpec.timeLimitSeconds ?? 30);
     setPlaying(true);
+    gameStartedAtRef.current = Date.now();
+    track('game_started', { jobId: jobId ?? undefined, adventure: theme });
   }
 
   function finishWin() {
     setGameWon(true);
     setPlaying(false);
     setAnimationState('celebrate');
+    track('game_won', {
+      jobId: jobId ?? undefined,
+      adventure: theme,
+      durationMs: gameStartedAtRef.current ? Date.now() - gameStartedAtRef.current : undefined,
+    });
+    gameStartedAtRef.current = null;
   }
 
   function move(direction: -1 | 1) {
@@ -208,13 +254,20 @@ export default function Home() {
           setGameLost(true);
           setPlaying(false);
           setAnimationState('idle');
+          track('game_lost', {
+            jobId: jobId ?? undefined,
+            adventure: theme,
+            durationMs: gameStartedAtRef.current ? Date.now() - gameStartedAtRef.current : undefined,
+            reason: 'timer_expired',
+          });
+          gameStartedAtRef.current = null;
           return 0;
         }
         return current - 1;
       });
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [playing, racerMode, gameWon, gameLost]);
+  }, [playing, racerMode, gameWon, gameLost, jobId, theme]);
 
   useEffect(() => {
     if (!generatedAsset || !activeRects.length) return;
@@ -230,6 +283,10 @@ export default function Home() {
     if (!photoMeta) return;
     const remaining = Math.max(0, new Date(photoMeta.expiresAt).getTime() - Date.now());
     const timer = window.setTimeout(() => {
+      if (!photoDeletedRef.current) {
+        track('photo_deleted', { jobId: jobId ?? undefined, adventure: theme, reason: 'ttl_expired' });
+        photoDeletedRef.current = true;
+      }
       setPhoto(null);
       setPhotoFile(null);
       setPhotoMeta(null);
@@ -243,9 +300,13 @@ export default function Home() {
       clearGeneratedAsset();
     }, remaining);
     return () => window.clearTimeout(timer);
-  }, [photoMeta]);
+  }, [photoMeta, jobId, theme]);
 
   function deletePhoto() {
+    if (!photoDeletedRef.current) {
+      track('photo_deleted', { jobId: jobId ?? undefined, adventure: theme, reason: 'user_deleted' });
+      photoDeletedRef.current = true;
+    }
     setPhoto(null);
     setPhotoFile(null);
     setPhotoMeta(null);
