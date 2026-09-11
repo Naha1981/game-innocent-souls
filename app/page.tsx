@@ -13,6 +13,12 @@ const themes: Theme[] = [
 
 const PHOTO_TTL_MS = 15 * 60 * 1000;
 type GenerationState = 'idle' | 'uploading' | 'generating' | 'succeeded' | 'error';
+type SpriteRect = { x: number; y: number; w: number; h: number };
+type RuntimeManifest = {
+  frame_layout?: { rows?: Record<string, SpriteRect[]>; sheetWidth?: number; sheetHeight?: number; cellWidth?: number; cellHeight?: number };
+  animation?: { rows?: Record<string, { durations_ms?: number[] }> };
+};
+type GeneratedAsset = { atlasDataUrl: string; manifest: RuntimeManifest };
 
 export default function Home() {
   const [name, setName] = useState('');
@@ -29,8 +35,23 @@ export default function Home() {
   const [generationState, setGenerationState] = useState<GenerationState>('idle');
   const [generationError, setGenerationError] = useState<string | null>(null);
   const [sourceObjectRef, setSourceObjectRef] = useState<string | null>(null);
+  const [generatedAsset, setGeneratedAsset] = useState<GeneratedAsset | null>(null);
+  const [animationState, setAnimationState] = useState<'idle' | 'walk' | 'jump' | 'celebrate'>('idle');
+  const [frameIndex, setFrameIndex] = useState(0);
 
   const selected = useMemo(() => themes.find(t => t.id === theme)!, [theme]);
+  const activeRects = generatedAsset?.manifest.frame_layout?.rows?.[animationState] ?? [];
+  const activeRect = activeRects[frameIndex % Math.max(1, activeRects.length)];
+  const cellWidth = generatedAsset?.manifest.frame_layout?.cellWidth ?? 256;
+  const cellHeight = generatedAsset?.manifest.frame_layout?.cellHeight ?? 256;
+  const sheetWidth = generatedAsset?.manifest.frame_layout?.sheetWidth ?? 1024;
+  const sheetHeight = generatedAsset?.manifest.frame_layout?.sheetHeight ?? 1024;
+
+  function clearGeneratedAsset() {
+    setGeneratedAsset(null);
+    setAnimationState('idle');
+    setFrameIndex(0);
+  }
 
   function handlePhoto(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -48,6 +69,7 @@ export default function Home() {
     setSourceObjectRef(null);
     setGenerationState('idle');
     setGenerationError(null);
+    clearGeneratedAsset();
   }
 
   async function createGame() {
@@ -68,6 +90,7 @@ export default function Home() {
     setScore(0);
     setPosition(42);
     setGenerationError(null);
+    clearGeneratedAsset();
     setGenerationState('uploading');
 
     try {
@@ -92,6 +115,16 @@ export default function Home() {
       if (!generationResponse.ok || !generationResult.ok) {
         throw new Error(generationResult.message || generationResult.code || 'Character generation failed.');
       }
+
+      const result = generationResult.result;
+      const atlas = result?.atlas;
+      const manifest = result?.manifest as RuntimeManifest | undefined;
+      if (!atlas?.data || atlas.encoding !== 'base64' || !manifest?.frame_layout?.rows) {
+        throw new Error('Generator succeeded but returned no playable atlas.');
+      }
+      setGeneratedAsset({ atlasDataUrl: `data:${atlas.mimeType || 'image/png'};base64,${atlas.data}`, manifest });
+      setAnimationState('idle');
+      setFrameIndex(0);
       setGenerationState('succeeded');
     } catch (error) {
       setGenerationState('error');
@@ -103,22 +136,50 @@ export default function Home() {
     setPlaying(true);
     setScore(0);
     setPosition(42);
+    setAnimationState('idle');
+    setFrameIndex(0);
   }
 
   function move(direction: -1 | 1) {
     if (!playing) return;
     setPosition(p => Math.max(8, Math.min(82, p + direction * 7)));
     setScore(s => s + 1);
+    setAnimationState('walk');
+  }
+
+  function jump() {
+    if (!playing || !generatedAsset) return;
+    setAnimationState('jump');
+    setScore(s => s + 2);
+    window.setTimeout(() => setAnimationState('idle'), 650);
+  }
+
+  function celebrate() {
+    if (!playing || !generatedAsset) return;
+    setAnimationState('celebrate');
+    window.setTimeout(() => setAnimationState('idle'), 900);
   }
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 'a') move(-1);
       if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'd') move(1);
+      if (e.key === ' ' || e.key.toLowerCase() === 'w') jump();
+      if (e.key.toLowerCase() === 'c') celebrate();
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   });
+
+  useEffect(() => {
+    if (!generatedAsset || !activeRects.length) return;
+    const durations = generatedAsset.manifest.animation?.rows?.[animationState]?.durations_ms ?? [];
+    const duration = durations[frameIndex % Math.max(1, durations.length)] ?? (animationState === 'idle' ? 250 : 125);
+    const timer = window.setTimeout(() => {
+      setFrameIndex(i => (i + 1) % activeRects.length);
+    }, Math.max(50, duration));
+    return () => window.clearTimeout(timer);
+  }, [generatedAsset, animationState, activeRects.length, frameIndex]);
 
   useEffect(() => {
     if (!photoMeta) return;
@@ -134,6 +195,7 @@ export default function Home() {
       setSourceObjectRef(null);
       setGenerationState('idle');
       setGenerationError(null);
+      clearGeneratedAsset();
     }, remaining);
     return () => window.clearTimeout(timer);
   }, [photoMeta]);
@@ -149,9 +211,18 @@ export default function Home() {
     setSourceObjectRef(null);
     setGenerationState('idle');
     setGenerationError(null);
+    clearGeneratedAsset();
   }
 
   const generationLabel = generationState === 'uploading' ? 'UPLOADING TEMPORARY PHOTO…' : generationState === 'generating' ? 'GENERATING CHARACTER…' : generationState === 'succeeded' ? 'REAL GENERATION COMPLETE' : generationState === 'error' ? 'REAL GENERATION NEEDS ATTENTION' : 'READY FOR GENERATOR';
+  const spriteStyle = activeRect && generatedAsset ? {
+    width: cellWidth,
+    height: cellHeight,
+    backgroundImage: `url(${generatedAsset.atlasDataUrl})`,
+    backgroundRepeat: 'no-repeat',
+    backgroundPosition: `-${activeRect.x}px -${activeRect.y}px`,
+    backgroundSize: `${sheetWidth}px ${sheetHeight}px`,
+  } : undefined;
 
   return (
     <main className="shell">
@@ -177,12 +248,12 @@ export default function Home() {
         </div>
 
         <div className="card game">
-          <div><div className="section-kicker">03 / PLAYABLE PREVIEW</div><h2>Play</h2><p className="muted">The game loop is playable immediately. The character becomes a real generated asset only after the worker reports a successful sprite-gen run.</p></div>
+          <div><div className="section-kicker">03 / PLAYABLE GAME</div><h2>Play</h2><p className="muted">When generation succeeds, the game uses the real sprite-gen atlas and its manifest rectangles. No runtime frame-grid guessing.</p></div>
           <div className={`game-screen ${playing ? 'playing' : ''}`}>
             <div className="sun"/><div className="hill"/>
             <div className="game-label">{created ? `${selected.icon} ${name} — ${selected.name}` : 'YOUR CHILD — ADVENTURE'}</div>
             <div className="collectible" style={{ left: `${Math.min(84, 18 + (score % 8) * 9)}%` }}>★</div>
-            <div className="player" style={{ left: `${position}%` }} aria-label="Prototype player character" />
+            {generatedAsset && activeRect ? <div className="player generated-player" style={{ ...spriteStyle, left: `${position}%` }} aria-label="Generated child game character" /> : <div className="player" style={{ left: `${position}%` }} aria-label="Prototype player character" />}
             {playing && <div className="score">STARS {score}</div>}
             {!created && <div className="screen-message">Create a hero to begin</div>}
             {created && !playing && <button className="play-button" onClick={play}>▶ PLAY {name.toUpperCase()}</button>}
@@ -190,9 +261,9 @@ export default function Home() {
           {created ? <div className="pipeline-card">
             <div className="pipeline-head"><strong>Generation pipeline</strong><span>{generationLabel}</span></div>
             <div className="pipeline-grid"><span>Adventure<strong>{selected.name}</strong></span><span>Animations<strong>Idle · Walk · Jump · Celebrate</strong></span><span>Safety<strong>No biometric ID</strong></span><span>Source<strong>Temporary • deleted after generation</strong></span></div>
-            <div className="pipeline-id">Job {jobId?.slice(0, 8)}…{sourceObjectRef ? ' • source secured' : ''}</div>
+            <div className="pipeline-id">Job {jobId?.slice(0, 8)}…{sourceObjectRef ? ' • source secured' : ''}{generatedAsset ? ' • atlas loaded' : ''}</div>
           </div> : <div><div className="game-title">Your game appears here</div><div className="steps"><span className="step">PHOTO</span><span className="step">CHARACTER</span><span className="step">ANIMATION</span><span className="step">PLAY</span></div></div>}
-          {playing && <div className="controls"><div className="game-title">Help {name} collect stars!</div><div className="control-row"><button onClick={() => move(-1)} aria-label="Move left">←</button><button onClick={() => move(1)} aria-label="Move right">→</button><button className="stop" onClick={() => setPlaying(false)}>STOP</button></div><div className="muted">Use ← → or A / D on a keyboard.</div></div>}
+          {playing && <div className="controls"><div className="game-title">Help {name} collect stars!</div><div className="control-row"><button onClick={() => move(-1)} aria-label="Move left">←</button><button onClick={() => move(1)} aria-label="Move right">→</button><button onClick={jump} disabled={!generatedAsset}>JUMP</button><button onClick={celebrate} disabled={!generatedAsset}>CELEBRATE</button><button className="stop" onClick={() => setPlaying(false)}>STOP</button></div><div className="muted">Use ← → or A / D to move. Space / W jumps. C celebrates.</div></div>}
         </div>
       </section>
       <footer className="footer">NahaLabs • Creche demo • No facial recognition • Browser preview expires after 15 minutes. Production source retention is worker-controlled and deletion is enforced after generation.</footer>
