@@ -4,9 +4,9 @@ export const PAYFAST_LIVE_PROCESS_URL = 'https://www.payfast.co.za/eng/process';
 export const PAYFAST_SANDBOX_PROCESS_URL = 'https://sandbox.payfast.co.za/eng/process';
 
 export const NAHAKIDS_PACKAGES = {
-  starter: { amount: 499, itemName: 'NahaKids Starter', description: '1 personalised child character and mini-game' },
-  hero: { amount: 999, itemName: 'NahaKids Hero', description: 'Personalised character, animations, environment and mini-game' },
-  family: { amount: 1999, itemName: 'NahaKids Family', description: 'Personalised family game package for up to 4 children' },
+  starter: { amount: 199, itemName: 'NahaKids Mini', description: '1 personalised child character and mini-game' },
+  hero: { amount: 499, itemName: 'NahaKids Hero', description: 'Personalised character, animations, environment and mini-game' },
+  family: { amount: 999, itemName: 'NahaKids Family', description: 'Personalised family game package for up to 4 children' },
 } as const;
 
 export type NahaKidsPackage = keyof typeof NAHAKIDS_PACKAGES;
