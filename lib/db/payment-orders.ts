@@ -18,6 +18,7 @@ export async function createPaymentOrder(input: {
     packageId: input.packageId,
     amountCents: input.amountCents,
     status: 'pending',
+    generationStatus: 'pending',
     jobId: input.jobId ?? null,
     sourceObjectRef: input.sourceObjectRef ?? null,
     generationRequestJson: input.generationRequestJson ?? null,
@@ -42,6 +43,39 @@ export async function markPaymentPaid(input: {
     ))
     .returning({ paymentId: paymentOrders.paymentId });
   return result.length === 1;
+}
+
+export async function claimGeneration(paymentId: string) {
+  const db = getDb();
+  if (!db) throw new Error('DATABASE_NOT_CONFIGURED');
+  const result = await db.update(paymentOrders)
+    .set({ generationStatus: 'running' })
+    .where(and(
+      eq(paymentOrders.paymentId, paymentId),
+      eq(paymentOrders.status, 'paid'),
+      eq(paymentOrders.generationStatus, 'pending'),
+    ))
+    .returning({ paymentId: paymentOrders.paymentId });
+  return result.length === 1;
+}
+
+export async function markGenerationComplete(paymentId: string) {
+  const db = getDb();
+  if (!db) throw new Error('DATABASE_NOT_CONFIGURED');
+  await db.update(paymentOrders)
+    .set({ generationStatus: 'complete' })
+    .where(eq(paymentOrders.paymentId, paymentId));
+}
+
+export async function releaseGenerationClaim(paymentId: string) {
+  const db = getDb();
+  if (!db) throw new Error('DATABASE_NOT_CONFIGURED');
+  await db.update(paymentOrders)
+    .set({ generationStatus: 'pending' })
+    .where(and(
+      eq(paymentOrders.paymentId, paymentId),
+      eq(paymentOrders.generationStatus, 'running'),
+    ));
 }
 
 export async function getPaymentOrder(paymentId: string) {
