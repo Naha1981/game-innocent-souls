@@ -18,6 +18,7 @@ const requiredFiles = [
   'lib/game-factory/theme-gameplay.ts',
   'lib/payfast.ts',
   'worker/main.py',
+  '.env.example',
 ];
 
 for (const relative of requiredFiles) {
@@ -26,9 +27,7 @@ for (const relative of requiredFiles) {
 }
 
 const duplicatePaymentImplementation = path.join(root, 'lib/payments/orders.ts');
-if (fs.existsSync(duplicatePaymentImplementation)) {
-  throw new Error('Duplicate payment-order implementation detected at lib/payments/orders.ts. Use lib/db/payment-orders.ts only.');
-}
+if (fs.existsSync(duplicatePaymentImplementation)) throw new Error('Duplicate payment-order implementation detected at lib/payments/orders.ts. Use lib/db/payment-orders.ts only.');
 
 const paymentOrders = fs.readFileSync(path.join(root, 'lib/db/payment-orders.ts'), 'utf8');
 for (const invariant of [
@@ -36,26 +35,35 @@ for (const invariant of [
   'eq(paymentOrders.packageId, input.packageId)',
   'eq(paymentOrders.amountCents, input.amountCents)',
   "ne(paymentOrders.status, 'paid')",
-]) {
-  if (!paymentOrders.includes(invariant)) throw new Error(`Payment-order update is missing invariant: ${invariant}`);
-}
+]) if (!paymentOrders.includes(invariant)) throw new Error(`Payment-order update is missing invariant: ${invariant}`);
+
+const checkoutRoute = fs.readFileSync(path.join(root, 'app/api/payments/payfast/route.ts'), 'utf8');
+if (!checkoutRoute.includes('const paymentId = randomUUID();')) throw new Error('Payment identifiers must be generated server-side.');
+if (checkoutRoute.includes('body.paymentId')) throw new Error('Client-supplied payment identifiers must not control payment order identity.');
+
+const statusRoute = fs.readFileSync(path.join(root, 'app/api/payments/payfast/status/route.ts'), 'utf8');
+if (!statusRoute.includes('[0-9a-f]{8}-[0-9a-f]{4}')) throw new Error('Payment status must require UUID payment identifiers.');
+if (statusRoute.includes('order.packageId') || statusRoute.includes('order.jobId')) throw new Error('Payment status endpoint must not disclose package or job ownership data.');
 
 const itnRoute = fs.readFileSync(path.join(root, 'app/api/payments/payfast/itn/route.ts'), 'utf8');
 if (!itnRoute.includes('markPaymentPaid({')) throw new Error('PayFast ITN must use the active payment-order transition.');
 if (!itnRoute.includes('packageId,')) throw new Error('PayFast ITN must pass the verified packageId to the payment transition.');
 if (!itnRoute.includes('amountCents,')) throw new Error('PayFast ITN must pass the verified amountCents to the payment transition.');
-if (!itnRoute.includes('const current = await getPaymentOrder(paymentId)')) throw new Error('PayFast ITN must tolerate a concurrent duplicate callback after another callback has completed the payment.');
+if (!itnRoute.includes('const current = await getPaymentOrder(paymentId)')) throw new Error('PayFast ITN must tolerate concurrent duplicate callbacks.');
 
 const generationRoute = fs.readFileSync(path.join(root, 'app/api/generation/route.ts'), 'utf8');
 const sourceRoute = fs.readFileSync(path.join(root, 'app/api/generation/source/route.ts'), 'utf8');
 for (const [name, route] of [['generation', generationRoute], ['source-photo', sourceRoute]]) {
-  if (!route.includes('SPRITE_GEN_SHARED_SECRET?.trim()') || !route.includes('!secret')) {
-    throw new Error(`${name} route must fail closed when the sprite worker shared secret is missing.`);
-  }
-  if (!route.includes("'x-worker-secret': secret")) {
-    throw new Error(`${name} route must authenticate requests to the sprite worker.`);
-  }
+  if (!route.includes('SPRITE_GEN_SHARED_SECRET?.trim()') || !route.includes('!secret')) throw new Error(`${name} route must fail closed when the sprite worker shared secret is missing.`);
+  if (!route.includes("'x-worker-secret': secret")) throw new Error(`${name} route must authenticate requests to the sprite worker.`);
 }
+
+const gameRoute = fs.readFileSync(path.join(root, 'app/api/games/[jobId]/route.ts'), 'utf8');
+if (!gameRoute.includes('GAME_ADMIN_DELETE_SECRET?.trim()')) throw new Error('Game asset deletion must require an operator secret.');
+if (!gameRoute.includes("x-admin-delete-secret")) throw new Error('Game asset deletion must use a dedicated server-side operator header.');
+
+const envExample = fs.readFileSync(path.join(root, '.env.example'), 'utf8');
+for (const variable of ['SPRITE_GEN_SHARED_SECRET=', 'GAME_ADMIN_DELETE_SECRET=']) if (!envExample.includes(variable)) throw new Error(`.env.example missing ${variable}`);
 
 const worker = fs.readFileSync(path.join(root, 'worker/main.py'), 'utf8');
 if (!worker.includes('if not expected or not secret:')) throw new Error('Sprite worker authorization must fail closed when the shared secret is missing.');
@@ -69,9 +77,7 @@ if (JSON.stringify(tsconfig.compilerOptions?.paths?.['@/*']) !== JSON.stringify(
 
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 if (packageJson.dependencies?.next !== '14.2.35') throw new Error(`Unexpected Next.js version: ${packageJson.dependencies?.next}`);
-for (const script of ['build', 'test:contracts', 'test:gameplay', 'test:generation', 'test:smoke']) {
-  if (!packageJson.scripts?.[script]) throw new Error(`Missing required npm script: ${script}`);
-}
+for (const script of ['build', 'test:contracts', 'test:gameplay', 'test:generation', 'test:smoke']) if (!packageJson.scripts?.[script]) throw new Error(`Missing required npm script: ${script}`);
 
 console.log('NahaKids production contract checks: PASS');
-console.log(`Verified ${requiredFiles.length} required production files, payment architecture invariants, worker privacy/authentication invariants, @ alias mapping, Next.js patch level and test scripts.`);
+console.log(`Verified ${requiredFiles.length} required production files plus payment, privacy, deletion and deployment invariants.`);
