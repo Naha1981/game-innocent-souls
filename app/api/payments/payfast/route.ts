@@ -34,8 +34,8 @@ export async function POST(request: Request) {
     const fields = {
       merchant_id: merchantId,
       merchant_key: merchantKey,
-      return_url: `${baseUrl}/?payment=success&m_payment_id=${encodeURIComponent(paymentId)}`,
-      cancel_url: `${baseUrl}/?payment=cancelled&m_payment_id=${encodeURIComponent(paymentId)}`,
+      return_url: `${baseUrl}/?payment=success&m_payment_id=${paymentId}`,
+      cancel_url: `${baseUrl}/?payment=cancelled&m_payment_id=${paymentId}`,
       notify_url: `${baseUrl}/api/payments/payfast/itn`,
       m_payment_id: paymentId,
       amount: product.amount.toFixed(2),
