@@ -48,3 +48,9 @@ export async function markGamePaid(jobId: string) {
     .set({ status: 'paid', paidAt: new Date() })
     .where(eq(gameRecords.jobId, jobId));
 }
+
+export async function deleteGameRecord(jobId: string) {
+  const db = getDb();
+  if (!db) throw new Error('DATABASE_NOT_CONFIGURED');
+  await db.delete(gameRecords).where(eq(gameRecords.jobId, jobId));
+}
