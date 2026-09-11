@@ -20,12 +20,18 @@ export async function POST(request: Request) {
   if (!process.env.DATABASE_URL?.trim()) return NextResponse.json({ ok: false, code: 'DATABASE_NOT_CONFIGURED' }, { status: 503 });
 
   try {
-    const body = await request.json() as { package?: unknown; paymentId?: unknown; jobId?: unknown };
+    const body = await request.json() as { package?: unknown; jobId?: unknown };
     if (!isNahaKidsPackage(body.package)) return NextResponse.json({ ok: false, code: 'INVALID_PACKAGE' }, { status: 400 });
     if (body.jobId !== undefined && !isUuid(body.jobId)) return NextResponse.json({ ok: false, code: 'INVALID_JOB_ID' }, { status: 400 });
-    const paymentId = typeof body.paymentId === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(body.paymentId) ? body.paymentId : randomUUID();
+
+    const paymentId = randomUUID();
     const product = NAHAKIDS_PACKAGES[body.package];
-    await createPaymentOrder({ paymentId, packageId: body.package, amountCents: paymentAmountCents(product.amount), jobId: typeof body.jobId === 'string' ? body.jobId : undefined });
+    await createPaymentOrder({
+      paymentId,
+      packageId: body.package,
+      amountCents: paymentAmountCents(product.amount),
+      jobId: typeof body.jobId === 'string' ? body.jobId : undefined,
+    });
 
     const baseUrl = publicBaseUrl(request);
     const testing = process.env.PAYFAST_SANDBOX === 'true';
